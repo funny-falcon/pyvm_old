@@ -1,0 +1,340 @@
+The EPL Description
+===================
+
+EPL is a whitespace-insensitive-python frontend to pyvm.
+
+EPL was made because there is interest in implementing some
+new extensions to the python language (syntactic and new
+vm features).  However, if we add these on the classic python
+syntax things will become very confusing because: we will
+have to maintain a documentation of "extensions" and advise
+people not to use them if they want their program to be
+portable.  We'd still risk forking and incompatibilities.
+Moreover, now that python 3000 is in the works, we would
+have three sets of features: python 2.x, py3k and pyvm!
+This would be a lot of trouble.  So instead of pretending to
+look like python, we can have a completely different frontend
+for it.
+
+pyvm will support both frontends.
+
+* The classic python frontend
+which is a subset of python and aims towards catching up with
+the new stuff; programs written in this form
+should run with python 2.4 if possible.
+
+* The EPL no-whitespace
+frontend which is already something else, and we can
+go wild. Of course it is possible to import classic python
+from EPL and EPL from classic python.
+
+EPL is part of pyvm 1.2 (out soon).
+It is possible to compile EPL files with:
+
+	pyvm -cc prog.pe
+
+to generate prog.pyc which can be imported from python.
+
+Syntax
+=======
+
+The syntax of EPL looks like C, so
+statements are delimited with semicolons "`;`" and compound statements
+are defined with curly braces "`{}`" (and a "compound statement" is a "statement".
+that means that braces are optional when they'd contain just one statement.
+If fact, the programmer is supposed to try to minimize the number of
+curly braces used!)
+
+A first example:
+
+	def Fib (n)
+	{
+		if (n < 2)
+			return 1;
+		return Fib (n - 2) + Fib (n - 1);
+	}
+
+	# or even
+
+	def Fib (n) { if (n < 2) return 1; return Fib (n - 2) + Fib (n - 1); }
+
+Because python's "`:`" is gone parenthesis *must* be used in
+the expression of `if` to separate it from the following
+statement.
+The same happens for `while`, `for`, `with`, `except` and the
+arguments of `lambda`. Some examples
+
+	while (x < y)
+		foo ();
+
+	for (i in X) {
+		if (i == 1) break;
+	} else print "Not found";
+
+	# actually list comprehensions don't need parenthesis
+	# this may be changed.
+	[x for (x in Y) if (x > 100)]
+
+	try foo ();
+	except (IndexError) ;
+	except () print "Yes. Parenthesis are needed for the default handler!";
+
+	lambda (x) x+1;
+
+If the body of `def` is a single statement braces are not required.
+So we could write the `Fib` function as:
+
+	def Fib (n)
+		if (n < 2) return 1;
+		else return Fib (n-2) + Fib (n-1);
+
+	# or even
+
+	def Fib (n) return n < 2 ? 1 : Fib (n-2) + Fib (n-1);
+
+The body of `class` on the other hand, *must* be included
+in braces because of inheritance.
+
+Other consequences of the non-whitespace mode are that:
+
+`elif` is not used. We can write
+
+  	if (x) foo ();
+  	else if (y) bar ();
+  	else if (z) zoo ();
+  	else pak ();
+
+which in normal python would increase the levels of indentation.
+(people coming from C, python or perl, should be careful with `else`:
+it matches with the inner `if`, `while`, `for`, `try-except`)
+
+`pass` is not used. An empty statement is `;` or `{ }`.
+
+	try foo ();
+	except ();
+
+There is no `exec` statement. Use `eval (compile (...))`.
+
+The dictionary ambiguity
+------------------------
+
+In python, the tokens `{` and `}` are used to make a dictionary
+and therefore there is an ambiguity since the parser cannot know
+if `{` starts a compound statement or a dictionary. In order to
+work around this, when the parser _expects_ a statement, `{` is
+taken as a compound statement block. This means that a toplevel
+expression cannot be a dictionary (which is OK since we almost
+never do that anyway). For instance
+
+	print "Hello world";
+	{1:2};	# this is an error
+	({1:2}); # OK
+
+Assignments in expressions
+--------------------------
+
+Assignments can be expressions. However things are a bit more
+complicated because in python the comma operator "`,`" has a higher priority
+than assignments "`=`" and consequently
+
+	x,y=y,x;
+
+means
+
+	(x,y)=(y,x);
+
+In EPL this happens in `tuple context`. The `tuple context` is
+when `,` would create a tuple. In other cases where `,` is used
+as a delimiter (list and dictionary makers), the comma has
+lower prriority. For example in:
+
+	[a,b=c,d];
+
+the assignment is evaluated first and this means that the
+result is a list with three items.
+
+	[a,(b=c),d];
+
+In function calls, `=` is used for keyword arguments and it's
+not an operator, unless it is nested in parenthesis:
+
+	foo (x=1);	# keyword 'x'
+	foo ((x=1));	# assign 'x' and pass to first parameter
+
+Finally, the comma in subscripts is in a `tuple context`, so
+
+	x [1,2];
+
+is the same as:
+
+	x [(1,2)];
+
+Conditional expressions
+-----------------------
+
+Conditional is done with the operators `?:`. The priority of
+the conditional operator is above the comma or the assignment
+and below anything else. So
+
+	1, x or y ? 2 : 3, 4
+is
+
+	1, ((x or y) ? 2 : 3), 4
+
+Everything else is pythonic.
+
+Extensions
+==========
+
+Methods
+-------
+
+The keyword `method` is a reserved word which can be used instead
+of `def`. It will create a function but will also add a hidden first
+argument `self`. So
+
+	method foo (x) return self.x;
+
+is exactly the same as
+
+	def foo (self, x) return self.x;
+
+Self operator
+-------------
+
+Inside methods we can use the `$` operator which must be followed
+by a symbol and it will convert this to an attribute of `self`
+(or in other words, of the first argument of the function).
+All these are the same:
+
+	def foo (self, x) return self.x;
+	method foo (x) return self.x;
+	method foo (x) return $x;
+
+Generally, `method` and `$` are useful for class functions,
+as in:
+
+	class A
+	{
+		method __init__ (x)
+			$x = x;
+		method inc (d):
+			$x += d;
+	}
+
+	# but not only
+	method foo (x) return $x;
+	A.foo = foo;
+
+With `method` and `$`, `self` becomes a kind of reserved word: it's
+not really reserved but it should not be used in function arguments.
+Currently in
+
+	method foo ()
+		def bar (x, self)
+			return $y;
+
+`bar` returns the attribute `y` of its second argument and *not* of
+`foo`'s first argument. This is allowed at the moment.
+
+Global object
+-------------
+
+`global` can be used as an object followed by `.` and a symbol
+name. Thus
+
+	global.x = 1;
+
+is the same as
+
+	global x;
+	x = 1;
+
+
+Function names can be attributes
+--------------------------------
+
+The function name in `def` and `method`, can be an attribute
+expression. For example:
+
+	def A.foo (self)
+		return self.x;
+
+This is equivalent to:
+
+	def some_tmp_name (self)
+		return self.x;
+	A.foo = some_tmp_name;
+	del some_tmp_name;
+
+and the `func_name` of the function is `foo`.
+This allows us to define methods outside class
+definitions and even in other modules. It is suggested
+to define big functions outside their class.
+
+
+Argument names can be members
+-----------------------------
+
+Only for `method`s, the argument names can be preceded by `$`.
+This is automatic assignment of instance attributes that have
+the same name with the argument. Very useful for __init__ methods.
+For example:
+
+	class A
+	{
+		method __init__ ($x, $y, $z)
+			;
+	}
+
+is exactly the same as:
+
+	class A
+	{
+		method __init__ (x, y, z)
+		{
+			$x = x;
+			$y = y;
+			$z = z;
+		}
+	}
+
+There are real local variables `x`, `y` and `z`
+and can be called as keyword arguments:
+
+	method A.__init__ ($x)
+		print $x, x;
+
+	a = A (x=123);
+
+Augmented assignments and globals
+---------------------------------
+
+In normal python (and up to 2.4) an augmented assignment makes a
+variable local. For example in
+
+	def foo ():
+		x += 1
+
+`x` is taken as a local (uninitialized) variable. This doesn't
+make much sense since python does not automatically initialize
+locals with some value. In EPL, augmented assignments only, do
+not mark a variable local. So in
+
+	def foo () x += 1;
+
+will increment the *global* `x`.
+
+NOTES
+=====
+
+* `lambda` and decorators are *not* implemented yet!
+* `raise` does not accept the old form 'class, instance, tb'
+  if you pass comma-separated elements they will be converted
+  to a tuple.
+
+TODO (maybe)
+============
+
+* `try` without `except` which just ignores exceptions?
+* Accept '!' for unary boolean `not`?

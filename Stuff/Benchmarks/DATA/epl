@@ -1,0 +1,960 @@
+# pyc: dict once, set once, func once
+# pyc: ''.join (literals) -> compile time
+# epl: /regex/
+
+# MORE TODOs
+# * suppose this /[^a]*a/. We should remove the second test because its there!
+# * If the repetitioner is applied on (.*), jump directly without the loop!
+# * non greedy jump optimization
+# * scan emptyness
+
+from cStringIO	import StringIO;
+from pyvm_extra	import faryield, far_yield_acceptor, StopFarIteration;
+from pyvm_extra	import Inf;
+from re		import DOTALL;
+
+#
+class Error
+{ }
+
+class NotSupported
+{ }
+
+class EndWalk
+{ }
+
+class ReBase
+{
+	method fixed ()
+		return $Min == $Max;
+	method recursive_repet ()
+		return False;
+	method first_term ()
+		return False;
+	method iterparent ()
+	{
+		i = $parent;
+		while (i) {
+			yield i;
+			i = i.parent;
+		}
+	}
+}
+
+class ReTerm(ReBase)
+{
+	method __init__ (cc)
+		$cc = cc;
+	method __str__ ()
+		if (len ($cc) == 1) return 'C(%r)' % $cc;
+		else return 'C';
+	method size ()
+		return $size = ($Min = 1), ($Max = 1);
+	method last ()
+		return $cc;
+	method walk_the_path ()
+		faryield ($cc);
+	method first_term ()
+		return self;
+}
+
+class Repet(ReBase)
+{
+	method __init__ ((m, M), nongreedy)
+		$backtrack, $unroll, $m , $M, $nongreedy = -1, False, m, M, nongreedy;
+	method __iter__ ()
+		yield $atom;
+	method __str__ ()
+		return '(%s) *%s{%i,%s}' % ($atom, ($nongreedy ? '?' : ''), $m, str ($M));
+	method recursive_repet ()
+		return not $unroll and $M != 1;
+	method size ()
+	{
+		m, M = $atom.size ();
+		if (not m)
+			raise Error;	# can match infinite times the empty string anywhere!
+		return $size = ($Min = $m * m), ($Max = $M * M);
+	}
+	method last ()
+		return $atom.last ();
+	method walk_the_path ()
+	{
+		if ($m) $atom.walk_the_path ();
+		raise EndWalk;
+	}
+}
+
+class ReGroup(ReBase)
+{
+	method __init__ (nodes, modifier)
+		$nodes, $modifier = nodes, modifier;
+	method __iter__ ()
+		for (i in $nodes)
+			yield i;
+	method __str__ ()
+		return 'ReGroup(%s) [[%s]]' % ($modifier, ','.join ([str (x) for (x in $nodes)]));
+	method size ()
+	{
+		Min = Max = 0;
+		for (c in $nodes) {
+			m, M = c.size ();
+			Min += m;
+			Max += M;
+		}
+		return $size = ($Min = Min), ($Max = Max);
+	}
+	method last ()
+		return $nodes [-1].last ();
+	method walk_the_path ()
+		for (i in $nodes)
+			i.walk_the_path ();
+	method first_term ()
+		return $nodes [0].first_term ();
+}
+
+class ReOr(ReBase)
+{
+	method __init__ (nodes)
+		$nodes = nodes;
+	method __iter__ ()
+		for (i in $nodes)
+			yield i;
+	method __str__ ()
+		return 'reOR(' + '|'.join ([str (x) for (x in $nodes)]) + ')';
+	method size ()
+	{
+		mm = [c.size () for (c in $nodes)];
+		$Min = min ([c [0] for (c in mm)]);
+		$Max = max ([c [1] for (c in mm)]);
+		return $size = $Min, $Max;
+	}
+	method last ()
+		return ''.join (list (set (''.join ([x.last () for (x in $nodes)]))));
+	method walk_the_path ()
+	{
+		X = [far_yield_acceptor (x.walk_the_path).next for (x in $nodes)];
+		while (1)
+			try v = ''.join ([x () for (x in X)]);
+			except (StopIteration) break;
+			else faryield (v);
+		if ($Min != $Max)
+			raise EndWalk;
+	}
+	method add_sizepoint ()
+	{
+		'''supose this "(a|bB|cCC)". The previous part of the regex has
+		assured that there is at least one char available in the string,
+		iow the first match can be performed safely ([abc])
+		In this case we'd have to add sizepoints only to "B" and "CC".
+		On the other hand there are cases which are too complex
+		to study. Then we add lencheck to the entire OR.  ''';
+
+		$checksizes = True;
+		for (i in $iterparent ())
+			if (isinstance (i, Repet))
+				return;
+		Min = $Min;
+		N = [];
+		for (i in $nodes) {
+			if (i.Min == Min) continue;
+			n = Min;
+			for (j in i)
+				if (not n) {
+					N.append (j);
+					break;
+				} else {
+					n -= j.Min;
+					if (n < 0) return; # fsck
+					if (not j.fixed ()) break; # no check!
+				}
+		}
+		for (i in N) # for now we don't descend
+			if (not isinstance (i, ReTerm)) return;
+		for (i in N)
+			i.checksize = size_after (i) [0];
+		$checksizes = False;
+	}
+}
+
+gen walk_the_path (n)
+{
+	p = n.parent;
+	while (p) {
+		if (isinstance (p, ReGroup))
+			for (i in p.nodes [p.nodes.index (n) + 1:])
+				try for (j in far_yield_acceptor (i.walk_the_path))
+					yield j;
+				except (EndWalk) return;
+		n, p = p, p.parent;
+	}
+}
+
+def size_after (n)
+{
+	Min = Max = 0;
+	p = n.parent;
+	while (p) {
+		if (isinstance (p, ReGroup))
+			for (i in p.nodes [p.nodes.index (n) + 1:]) {
+				m, M = i.size;
+				Min += m;
+				Max += M;
+			}
+		n, p = p, p.parent;
+	}
+	return Min, Max;
+}
+
+def after_term (n)
+{
+	p = n.parent;
+	while (p)
+		if (not isinstance (p, ReGroup)) break;
+		else if (p.nodes [-1] == n) n, p = p, p.parent;
+		else return p.nodes [p.nodes.index (n) + 1].first_term ();
+	return None;
+}
+# ** ** ** ** ** **
+
+#
+# Parser - convert a regex string to a tree of our Re* classes
+# can raise NotSupported or Error (which can be a bug) or anything else (which
+# is Error, and consequently may be a bug)
+#
+
+gen esplit (s)
+{
+	esc = False;
+	for (i in s) 
+		if (esc) {
+			yield '\\' + i;
+			esc = False;
+		} else if (i == '\\') esc = True;
+		else yield i;
+}
+
+def negate_class (cc)
+	return ''.join ([chr (x) for (x in range (256)) if (chr (x) not in cc)]);
+
+stdclass = {
+	'w': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_',
+	's': ' \t\r\n\f',
+	'd': '0123456789',
+	'W': negate_class ('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_'),
+	'S': negate_class (' \t\r\n\f'),
+	'D': negate_class ('0123456789'),
+	'.': negate_class (''),
+	'n':'\n', 'r':'\r', 'a':'\a', 'f':'\f', 't':'\t'
+};
+
+def gpeek (s, x)
+	try
+		if (s.next () == x) return True;
+		else {
+			s.unyield ();
+			return False;
+		}
+	except (StopIteration)
+		return False;
+
+def gexpect (s, x)
+	if (s.next () != x)
+		raise Error;
+
+def custom_class (s)
+{
+	cc = [];
+	neg = gpeek (s, '^');
+	if (gpeek (s, '-'))
+		cc = ['-'];
+
+	haverange = False;
+	for (i in s) {
+		if (i == ']') {
+			if (haverange) cc.append ('-');
+			break;
+		}
+
+		if (i == '-' and not haverange) {
+			haverange = True;
+			continue;
+		}
+
+		# escaped ?
+		if (len (i) == 2)
+			if ((i = i [1]) in stdclass) {
+				i = stdclass [i];
+				if (len (i) > 1) {
+					# [a-\w] should be wrong 
+					if (haverange)
+						raise Error;
+					cc.append (i);
+					continue;
+				}
+			}
+
+		if (haverange) {
+			haverange = False;
+			cc.append (''.join ([chr (x) for (x in range (ord (cc.pop ()), ord (i) + 1))]));
+		} else cc.append (i);
+	} else raise Error;
+
+	cc = ''.join (sorted (set (cc)));
+	if (neg)
+		cc = negate_class (cc);
+
+	return ReTerm (cc);
+}
+
+def getnum (s)
+{
+	n = '';
+	for (i in s)
+		if (i.isdigit ()) n += i;
+		else return int (n), i;
+}
+
+def get_brep (s)
+{
+	m, i = getnum (s);
+	if (i == ',')
+		if (gpeek (s, '}')) M, i = Inf, '}';
+		else M, i = getnum (s);
+	else M = m;
+	if (i != '}')
+		raise Error;
+	return Repet ((m, M), gpeek (s, '?'));
+}
+
+def break_or (l)
+{
+	if ('|' not in l)
+		return l;
+	if (l [0] == 'l' or l [-1] == 'l')
+		raise NotSupported;
+	L, S = [], [];
+	for (i in l)
+		if (i == '|') {
+			if (len (L) == 1) S.append (L [0]);
+			else S.append (ReGroup (L, ':'));
+			L = [];
+		} else L.append (i);
+	if (len (L) == 1) S.append (L [0]);
+	else S.append (ReGroup (L, ':'));
+	return [ReOr (S)];
+}
+
+gen re_parse0 (s, p)
+{
+	nrep = {'*':(0,Inf), '?':(0,1), '+':(1,Inf)};
+
+	for (i in s) {
+		# switch-case 
+		if (len (i) == 1)
+			if (i in '^$') raise NotSupported;
+			else if (i == '|') yield '|';
+			else if (i == '.') yield ReTerm (0);	# special. no string
+			else if (i in nrep) yield Repet (nrep [i], gpeek (s, '?'));
+			else if (i == '[') yield custom_class (s);
+			else if (i == '{') yield get_brep (s);
+			else if (i == '(') {
+				t = gpeek (s, '?') ? s.next () : '';
+				yield ReGroup (break_or (list (re_parse (s, p+1))), t);
+			} else if (i == ')' and p) return;
+			else yield ReTerm (i);
+		else
+			try yield ReTerm (stdclass [i [1]]);
+			except () yield ReTerm (i [1]);
+	} else if (p) raise Error;
+}
+
+gen re_parse (s, p=0)
+{
+	last = None;
+	for (i in re_parse0 (s, p)) {
+		if (isinstance (i, Repet))
+			if (not last) raise Error;
+			else i.atom = last;
+		else if (last) yield last;
+		last = i;
+	}
+	yield last;
+}
+
+def build (r, m)
+	return ReGroup (break_or (list (re_parse (esplit (r)))), m);
+
+#
+# ## Re ##
+#
+
+MATCHCODE = r"""
+static inline int state0 (ucp);
+static inline int state1 (ucp);
+int match (ucp a, int startpos, int endpos, int *rez)
+{
+	STREND = a + endpos; a += startpos;
+	if ((a + %i <= STREND) && %s (a)) {
+		int i;
+		a -= startpos;
+		for (i = 0; i < ngroup (); i++) {
+			*rez++ = CAP [i][0] - a;
+			*rez++ = CAP [i][1] - a;
+		}
+		return 1;
+	}
+	return 0;
+}
+#if 0
+int search (ucp a)
+{
+	STREND = a + strlen ((char*)a);
+	return state0 (a);
+}
+#endif
+""";
+
+class Re
+{
+	method __init__ (r, flags)
+	{
+		dotall = flags & DOTALL;
+
+		# remove anchors. We can't handle ^$ in the middle of the regexp
+		$r = r;
+		if ($tailanchored = r [-1] == '$')
+			r = r [:-1];
+		$anchored = r [0] == '^';
+		r = $anchored ? r[1:] : '.*?(' + r + ')';
+
+		$root = build (r, $anchored ? '' : ':');
+		$root.parent = None;
+		$nodes = [i for (i in far_yield_acceptor ($connect, $root))];
+		for (i in $nodes)
+			if (isinstance (i, ReTerm) and i.cc == 0)
+				i.cc = negate_class (dotall ? '' : '\n');
+		for (i, n in enumerate ($nodes))
+			n.i = i;
+		$nodes.insert (0, $root);
+		$size = $root.size ();
+		$strlen_points ();
+		$groupids ();
+
+		# optimizations
+		$study_unroll ();
+		$study_backtrack_greedy ();
+
+		# checks
+		$no_double_recursion ();
+	}
+
+	method connect (x)
+		for (i in x) {
+			faryield (i);
+			i.parent = x;
+			if (not isinstance (i, ReTerm))
+				$connect (i);
+		}
+
+	method strlen_points ()
+		# Must not search past the end of the string. We do one check
+		# initially at match() for minimum length, and then check on
+		# each non-fixed size. That is unrolled repetitions and "or".
+		# We don't check for recursive repetitions because they contain
+		# non-fixed subexpressions and checks will be done there.
+		for (i in $nodes)
+			if (isinstance (i, Repet))
+				i.afterlen = size_after (i) [0];
+			else if (isinstance (i, ReOr) and not i.fixed ()) 
+				i.add_sizepoint ();
+
+	method groupids ()
+	{
+		maxid = 0;
+		for (i in $nodes)
+			if (isinstance (i, ReGroup) and i.modifier != ':')
+				i.Cid, maxid = maxid, maxid + 1;
+		$maxid = maxid;
+	}
+
+	# optimizations
+	method study_unroll ()
+		#
+		# - We unroll repetitioners on fixed-size
+		# subexpressions which are definitely OK.
+		# - We can also unroll the "optional" '?' repetitioner
+		# but that will be done at its code generation if MAX==1.
+		#
+		for (i in $nodes)
+			if (isinstance (i, Repet))
+				if (i.atom.fixed ()) i.unroll = True;
+
+	method study_backtrack_greedy ()
+		#
+		# Suppose /A*B/ vs the string "AAAAAAX". Once the
+		# greedy repetitioner stops at 'X', there is no need
+		# to backtrack hoping for a less greedy match: The
+		# fact that so far we matched 'A' means that there is
+		# no way on earth we can match 'B'!.
+		#
+		for (i in $nodes)
+			if (isinstance (i, Repet) and not i.nongreedy) {
+				S = set (i.last ());
+				n = 0;
+				for (j in walk_the_path (i))
+					if (not set (j) & S) {
+						i.backtrack = n;
+						break;
+					} else n += 1;
+				else if (not n)
+					i.backtrack = 0; # at the end of regex
+			}
+
+	#method study_always_match ()
+		# Always matching.
+		#
+		# Suppose /[^=]*=/. The two matching points are covering all
+		# the possible characters so this means that if [^=] didn't
+		# match, '=' surely will and there should be no need to actually
+		# test this character.
+	#	for (i in $nodes)
+	#		if (isinstance (i, Repet) and not i.nongreedy
+	#		    and i.backtrack == 0 and (x = after_term (i)))
+	#			if (len (set (i.last () + x.cc)) == 256)
+	#				x.alwaysok = 1;
+
+	# can't do repetition on non fixed size repetitions /((a|bb)+)*/
+	method no_double_recursion ()
+		for (i in $nodes)
+			if (i.recursive_repet ()) 
+				for (j in i.iterparent ())
+					if (j.recursive_repet ())
+						raise NotSupported;
+
+	# code generation
+	method gencode ()
+	{
+		out = $out = ($buffer = StringIO ()).write;
+		out ('// regex /%s/\n' %$r);
+		$build_ctbl ();
+		out ('#include <stdio.h>\n'+
+		     '#include <string.h>\n'+
+		     'typedef unsigned char *ucp;\n'+
+		     'static ucp STREND;\n'+
+		     'static inline int true_state (ucp a) { return 1; }\n'+
+		     'static inline ucp MAX (ucp a, ucp b) { return a >= b ? a : b; }\n'+
+		     'static inline ucp MIN (ucp a, ucp b) { return a <= b ? a : b; }\n'
+		);
+
+		out ('int ngroup () { return %i; }\n' %$maxid);
+
+		if ($maxid)
+			out ('static ucp CAP [2][%i];\n' %$maxid);
+		if ($tailanchored) {
+			eos = 'eos';
+			out ('static inline int eos (ucp a) { return a == STREND; }\n');
+		} else eos = 'true_state';
+
+		for (i in far_yield_acceptor ($root.codegen, eos))
+			out (i);
+		out (MATCHCODE % ($root.Min, $anchored ? 'capture0_0' : $nodes [3].outstate));
+		return $buffer.getvalue ();
+	}
+
+	method build_ctbl ()
+	{
+		ctbl = [];
+		for (i in $nodes)
+			if (isinstance (i, ReTerm) and 255 > len (i.cc) > 1)
+				if (i.cc in ctbl) i.bit = ctbl.index (i.cc);
+				else {
+					i.bit = len (ctbl);
+					ctbl.append (i.cc);
+				}
+		if (not ctbl)
+			return;
+		cv = [];
+		for (i in xrange (256)) {
+			c = chr (i);
+			f = 0;
+			for (n, j in enumerate (ctbl))
+				if (c in j)
+					f |= 1 << n;
+			cv.append ('%i' %f);
+		}
+		$out ("static const unsigned %s ctbl [] = {" % (len (ctbl) <= 8 ? "char" : "int"));
+		$out (','.join (cv));
+		$out ('};\n');
+	}
+}
+
+'''
+##########################################################
+ 			Code generation
+##########################################################
+
+Each node's codegen gets the name of the 'onOK' function
+to call if this node matches, and returns the name of this
+node. The nodes are traversed backwards and starting from
+'true_state' as the first 'onOK' we end up to the entry 
+function of the library ('state0' or something).
+
+There are many special cases in the repetitioners
+(greedy/unroll/dotall/backtrack)
+''';
+
+gen ifdef_removal (s)
+{
+	rm = 0;
+	for (i in s)
+		if (not i or i [0] != '#') {
+			if (not rm) yield i;
+		} else if (i == '#if 0')
+			rm += 1;
+		else if (i [:3] == '#if') {
+			if (rm) rm += 1;
+		} else if (i == '#endif') {
+			if (rm) rm -= 1;
+		} else if (i == '#else') {
+			if (not rm) rm = 1;
+			else if (rm == 1) rm = 0;
+		}
+}
+
+def remove_ifdefs (txt)
+	return'\n'.join (ifdef_removal (txt.split ('\n')));
+
+def proto (s)
+	faryield ('static inline int %s (ucp);\n' %s);
+
+ReTermUnlikelyTemplate = """
+static inline int %s (ucp a)
+{
+	return !(%s) ? 0  : %s (a + 1);
+}
+""";
+ReTermLikelyTemplate = """
+static inline int %s (ucp a)
+{
+	return %s ? %s (a + 1) : 0;
+}
+""";
+
+method ReTerm.codegen (onok)
+{
+	test =  len ($cc) == 1 ? "*a == %r" % $cc :
+		len ($cc) == 255 ? "*a != %r" % negate_class ($cc) :
+		len ($cc) == 256 ? '1' :
+		"%i & ctbl [*a]" % (1 << $bit);
+	if (hasattr (self, 'checksize'))
+		test = 'a + %i < STREND && ' % $checksize + test;
+	func = 'state%i' % $i;
+	t = len ($cc) < 128 ? ReTermUnlikelyTemplate : ReTermLikelyTemplate;
+	faryield (t % (func, test, onok));
+	return func;
+}
+
+ReOrTemplate = """
+static inline int %s (ucp a)
+{
+	return %s;
+}
+""";
+
+ReOrSZTemplate = """
+static inline int %s (ucp a)
+{
+%s
+	return 0;
+}
+""";
+
+method ReOr.codegen (onok)
+{
+	func = 'state%i' % $i;
+	if ($fixed () or not $checksizes)
+		faryield (ReOrTemplate % (func, ' || '.join
+			 ([i.codegen (onok) + '(a)' for (i in $nodes)])));
+	else {
+		N = [];
+		Min = $Min;
+		for (i in $nodes) {
+			t = i.Min == Min ? '1' : 'a + %i < STREND' % i.Min;
+			N.append ('\tif (%s && %s (a)) return 1;' % (t, i.codegen (onok)));
+		}
+		faryield (ReOrSZTemplate % (func, '\n'.join (N)));
+	}
+	return func;
+}
+
+ReDoGroupTemplate = """
+static inline int %s (ucp a)
+{
+	if (!%s (a))
+		return 0;
+	CAP [%i][%i] = a;
+	return 1;
+}
+""";
+
+def capgen (func, Cid, s)
+{
+	cap = 'capture%i_%i' % (Cid, s);
+	faryield (ReDoGroupTemplate % (cap, func, Cid, s));
+	return cap;
+}
+
+method ReGroup.codegen (onok)
+{
+	if ($modifier != ':') onok = capgen (onok, $Cid, 1);
+	for (i in reversed ($nodes))
+		onok = i.codegen (onok);
+	if ($modifier != ':') onok = capgen (onok, $Cid, 0);
+	return $outstate = onok;
+}
+
+RepetGRTemplate = """
+static inline int %(state)s (ucp a)
+{
+#if %(HAVETIMES)i
+static	unsigned int x;
+#endif
+#if %(MAX)i
+	if (x < %(MAX)i) {
+#endif
+#if %(HAVETIMES)i
+		++x;
+#endif
+		if (%(substate)s (a)) {
+#if %(HAVETIMES)i
+			--x;
+#endif
+			return 1;
+		}
+#if %(HAVETIMES)i
+		--x;
+#endif
+#if %(MAX)i
+	}
+#endif
+#if %(MIN)i
+	if (x < %(MIN)i) return 0;
+#endif
+	return %(onok)s (a);
+}
+#if %(BCHECK)i
+static inline int %(stateb)s (ucp a)
+{
+	if (a + %(MINLENR)i > STREND)
+		return 0;
+	return %(state)s (a);
+}
+#endif
+""";
+
+method Repet.greedy_recursive (onok)
+{
+	havetimes = ($m, $M) != (0, Inf);
+	func = 'state%i' % $i;
+	if (($m, $M) == (0, 1)) {
+		# unroll '?'
+		havetimes = False;
+		subst = $atom.codegen (onok);
+	} else {
+		proto (func);
+		subst = $atom.codegen (func);
+	}
+	if (not $m)
+		stateb, func = func, func + 'b';
+	else stateb = '';
+
+	S = RepetGRTemplate % {'HAVETIMES':havetimes, 'MIN':$m, 'MAX':($M not in (1, Inf)?$M:0),
+				'state':func, 'substate':subst, 'onok':onok,
+				'MINLENR':$afterlen, 'stateb':stateb, 'BCHECK':not $m};
+	faryield (remove_ifdefs (S));
+
+	return func;
+}
+
+RepetGUTemplate = r"""
+static inline int %(state)s (ucp a)
+{
+	ucp END = STREND - %(MINLEN1)i + 1;
+#if %(BCHECK)i
+	ucp A0 = a;
+#endif
+#if %(NOT_MAXIS1)i
+#if %(MAX)i
+	END = MIN (END, a + %(MAX)i * %(MINLEN0)i);
+#endif
+	while (a < END && %(substate)s (a))
+#else
+	if (a < END && %(substate)s (a))
+#endif
+		a += %(SIZE)i;
+#if %(MIN)i
+#if %(BCHECK)i
+	A0 += %(MINLEN0)i * %(MIN)i;
+#endif
+#else
+	if (a + %(MINLEN2)i > STREND)
+		return 0;
+#endif
+#if %(BCHECK)i
+#if %(HAVEBACK)i
+	A0 = MAX (A0, a - %(SIZE)i * %(BACKN)i);
+#endif
+	for (;a >= A0; a -= %(SIZE)i)
+#endif
+		if (%(onok)s (a))
+			return 1;
+	return 0;
+}
+""";
+
+RepetDOTALLTemplate = r"""
+static inline int %(state)s (ucp a)
+{
+	ucp END = STREND - %(AFTERLEN)i;
+#if %(MAX)i
+	END = MIN (END, a + %(MAX)i);
+#endif
+#if %(MIN)i
+	a += %(MIN)i;
+#endif
+#if %(ZEROBACK)i
+	if (END >= a && %(onok)s (END))
+		return 1;
+#else
+	while (END >= a)
+		if (!%(onok)s (END))
+			--END;
+		else
+			return 1;
+#endif
+	return 0;
+}
+""";
+
+method Repet.greedy_unroll (onok)
+{
+	func = 'state%i' % $i;
+	if (isinstance ($atom, ReTerm) and len ($atom.cc) == 256) {
+		S = RepetDOTALLTemplate % {'state':func, 'onok':onok, 'AFTERLEN':$afterlen,
+					   'MIN':$m, 'MAX':($M in (0, Inf) ? 0 : $M),
+					   'ZEROBACK':$backtrack==0};
+		faryield (remove_ifdefs (S));
+		return func;
+	}
+	havetimes = ($m, $M) != (0, Inf) or $backtrack;
+	subst = $atom.codegen ('true_state');
+	MAXNOT1 = $M != 1;
+	MINLEN0 = $atom.Min;
+	MINLEN1 = $atom.Min + $afterlen;
+	MINLEN2 = $afterlen;
+	S = RepetGUTemplate % {'HAVETIMES':havetimes, 'MIN':$m, 'MAX':($M==Inf?0:$M),
+				'state':func, 'substate':subst, 'onok':onok,
+				'SIZE': $atom.Min,
+				'MINLEN2':MINLEN2,
+				'MINLEN1':MINLEN1,
+				'MINLEN0':MINLEN0,
+				'NOTMIN':$m==0,
+				'BACKN':$backtrack, 'MAXNOT1':MAXNOT1,
+				'HAVEBACK': $backtrack >= 0,
+				'BCHECK': $m != 0 or $backtrack != 0,
+				'NOT_MAXIS1': $M != 1
+		};
+	faryield (remove_ifdefs (S));
+	return func;
+}
+
+RepetNRTemplate = """
+static inline int %(state)s (ucp a)
+{
+#if %(HAVETIMES)i
+static	unsigned int x;
+#endif
+#if %(MIN)i
+	if (x >= %(MIN)i)
+#endif
+	if (%(onok)s (a)) {
+#if %(HAVETIMES)i
+		x = 0;
+#endif
+		return 1;
+	}
+#if %(MAX)i
+	if (x > %(MAX)i) {
+		x = 0;
+		return 0;
+	}
+#endif
+#if %(HAVETIMES)i
+	++x;
+#endif
+	return %(substate)s (a);
+}
+""";
+
+method Repet.nongreedy_recursive (onok)
+{
+	havetimes = ($m, $M) != (0, Inf);
+	func = 'state%i' % $i;
+	proto (func);
+	subst = $atom.codegen (func);
+	S = RepetNRTemplate % {'HAVETIMES':havetimes, 'MIN':$m, 'MAX':($M==Inf?0:$M),
+				'state':func, 'substate':subst, 'onok':onok};
+	faryield (remove_ifdefs (S));
+	return func;
+}
+
+RepetNUTemplate = r"""
+static inline int %(state)s (ucp a)
+{
+	ucp END = STREND - %(MINLEN1)i;
+#if %(MIN)i
+	ucp A0 = a + %(SIZE)i * %(MIN)i;
+#endif
+#if %(MAX)i
+	END = MIN (END, a + %(SIZE)i * %(MAX)i - 1);
+#endif
+	//if (a + %(MINLEN0)i > STREND)	return 0;
+	for (;;) {
+#if %(MIN)i
+		if (a >= A0)
+#endif
+		if (%(onok)s (a))
+			return 1;
+		if (a > END)
+			return 0;
+		if (!%(substate)s (a))
+			return 0;
+		a += %(SIZE)i;
+	}
+}
+""";
+
+method Repet.nongreedy_unroll (onok)
+{
+	havetimes = ($m, $M) != (0, Inf);
+	func = 'state%i' % $i;
+	subst = $atom.codegen ('true_state');
+
+	S = RepetNUTemplate % {'HAVETIMES':havetimes, 'MIN':$m, 'MAX':($M==Inf?0:$M),
+				'state':func, 'substate':subst, 'onok':onok,
+				'MINLEN0':$afterlen,
+				'MINLEN1':$atom.Min+$afterlen,
+				'SIZE':$atom.Min};
+	faryield (remove_ifdefs (S));
+
+	return func;
+}
+
+method Repet.codegen (onok)
+	return ($nongreedy ? $unroll ? $nongreedy_unroll : $nongreedy_recursive
+			   : $unroll ? $greedy_unroll : $greedy_recursive) (onok);
+
+# public
+
+def re2c (r, f)
+	return Re (r, f).gencode ();

@@ -1,0 +1,297 @@
+# #-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#
+from _rejit import *;
+
+
+CHECKPROG = r"""
+#include <stdio.h>
+#include <string.h>
+     #define COLS "\033[01;37m"
+     #define COLB "\033[01;34m"
+     #define COLR "\033[01;31m"
+     #define COLX "\033[01;35m"
+     #define COLE "\033[0m"
+void docheck (char *s, int expect)
+{
+	int rez = match (s, 0, strlen (s), CAP);
+	printf ("Regex: on [%s] == %i (%s)\n", s, rez, rez == expect ? COLS"OK"COLE : COLB"FAIL"COLE);
+}
+int main ()
+{
+""";
+
+TESTS = (
+ ('[ab]*B',
+	# first test -- simple unrolled repetitioner. all fixed.
+	('aB', 1),
+	('aaaaB', 1),
+	('aaCB', 0),
+	('aaa', 0),
+	('B', 1),
+	('', 0),
+	('bbaaB', 1),
+	('aaaaaaaCaaaaaaaaaaDaaaaaabbbbbbaaaaB', 0),
+	('aaaaaaaCaaaaaaaaaaDaaaaaabbbbbbaaaaX', 0),
+	('aaaaaaaCaaaaaaaaaaDDDDDDDDDaaaaaaaaaaaaaaaaabbbbbbaaaaX', 0),
+),
+ ('a+aB',
+	# no backtrack N
+	('aaB', 1),
+	('aaaB', 1),
+	('aB', 0),
+	('aaaaaaaaaaaC', 0),
+	('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaCB', 0),
+	('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaB', 1),
+),
+ ('[ab]*ab',
+	# Infinite backtrack
+	('ab', 1),
+	('aabab', 1),
+	('aababzzz', 1),
+	('aa', 0),
+	('bbb', 0),
+	('bab', 1),
+	('baab', 1),
+	('bbbbbbbbbbbbbbbbbbbbaaaaaaaaaaaaaaaaaaaaab', 1),
+	('bbbbbbbbbbbbbbbbbbbbaaaaaaaaaaaaaaaaaaaaa', 0),
+),
+ ('(foo){2,3}bar',
+	('foobar', 0),
+	('foofoobar', 1),
+	('foofoofoobar', 1),
+	('foofoofoofoobar', 0),
+	('foofoo', 0),
+),
+ ('f(a|bb|CCC)c',
+	('fac', 1),
+	('faac', 0),
+	('fbbc', 1),
+	('fbc', 0),
+	('fCCCc', 1),
+	('fCCCCc', 0),
+),
+ ('f(aa|bb)c',
+	('faac', 1),
+	('fbbc', 1),
+	('fbc', 0),
+	('fc', 0),
+	('fbac', 0),
+),
+('f(a|bb)*c',
+	('fabbc', 1),
+	('fc', 1),
+	('fbbac', 1),
+	('fabbac', 1),
+	('fabbbbac', 1),
+	('fabbbbabbabbabbabbabbaabbabbbbaaac', 1),
+	('fbbbbc', 1),
+),
+# size tests. Check that we don't match pass the end of the string.
+ ('('+'[^bv]'*5 + ')+',
+	('aa', 0),
+	('aaaaa', 1),
+	('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1),
+),
+('(....)+',
+	('xxxxx', 1),
+	('xxxx', 1),
+	('xxx', 0),
+	('xx', 0),
+	('x', 0),
+	('', 0),
+),
+('.+...',
+	('xxxxx', 1),
+	('xxxx', 1),
+	('xxx', 0),
+	('xx', 0),
+	('x', 0),
+	('', 0),
+),
+ ('.*...',
+	('xxxxx', 1),
+	('xxxx', 1),
+	('xxx', 1),
+	('xx', 0),
+	('x', 0),
+),
+ ('X?(a|b.|c..)',
+	('a', 1),
+	('b', 0),
+	('c', 0),
+	('cx', 0),
+	('xcx', 0),
+	('Xcxx', 1),
+	('cxxxx', 1),
+	('cxxx', 1),
+	('cxx', 1),
+),
+('(.?....)+.*',
+	('', 0),
+	('x', 0),
+	('xx', 0),
+	('xxx', 0),
+	('xxxx', 1),
+),
+('[^yx]{2,3}x',
+	('', 0),
+	('ax', 0),
+	('aa', 0),
+	('aax', 1),
+	('aaax', 1),
+	('aaa', 0),
+	('aaaax', 0),
+	('aaaaaaax', 0),
+),
+('(.{1,2})*...',
+	('', 0),
+	('x', 0),
+	('xx', 0),
+	('xxx', 1),
+	('xxxx', 1),
+	('xxxxxxxxxxxxxxxxxxxxxxxxxxxx', 1),
+),
+# no greedy
+('.*?abcd',
+	('xxaxxabxxabcxxabcd', 1),
+	('abcd', 1)
+),
+('.{,3}?X',
+	('xxxxxxX', 0),
+	('xxxxxX', 0),
+	('xxxxX', 0),
+	('xxxX', 1),
+	('xxX', 1),
+	('xX', 1),
+	('X', 1),
+),
+('.{,3}?XY',
+	('xxXxxxxXY', 0),
+	('xxxxxXY', 0),
+	('xxxxXY', 0),
+	('xxxXY', 1),
+	('xxXY', 1),
+	('xXY', 1),
+	('XY', 1),
+),
+('(..){,3}?X',
+	('xxxXX', 1),
+	('xxxxxxX', 1),
+	('xxxxxxxxxxX', 0),
+	('xxxxxxxxX', 0),
+	('X', 1),
+	('', 0),
+),
+('(..){,3}?XA',
+	('xxXxXA', 1),
+	('XxXxXxXA', 1),
+	('XxXxXxXxXA', 0)
+),
+
+('.{3,}?XY',
+	('xxXxxxxXY', 1),
+	('xxxxxXY', 1),
+	('xxxxXY', 1),
+	('xxxXY', 1),
+	('xxXY', 0),
+	('xXY', 0),
+	('XY', 0),
+),
+('.{2,4}?XY',
+	('xxXxxxxXY', 0),
+	('xxxxxXY', 0),
+	('xxxxXY', 1),
+	('xxxXY', 1),
+	('xxXY', 1),
+	('xXY', 0),
+	('XY', 0),
+),
+('''(?:'[^']*'){2,3}''',
+	("'foo''bar'", 1),
+	("'f''r''z'", 1),
+	("'f'r''z'", 0),
+	("'f'r''z", 0),
+	("'fss'rss''zssss", 0),
+	("'''", 0),
+	("'abc''", 0),
+	("'abc''a", 0),
+	("''''''", 1),
+),
+('a?b',
+	('b', 1),
+	('ab', 1),
+	('a', 0),
+	('ac', 0),
+	('', 0),
+	('aa', 0),
+),
+('a (?:x+)?',
+	('a', 0),
+	('a ', 1),
+	('a x', 1),
+	('a xxxxxxxxxxxxx', 1),
+),
+('a(.+x)?a',
+	('a', 0),
+	('aa', 1),
+	('axxxa', 1),
+	('ax', 0),
+),
+('ab$',
+	('ab', 1),
+	('abc', 0),
+	('a', 0),
+),
+('(ab)+$',
+	('ababab', 1),
+	('abababb', 0),
+	('abababa', 0),
+	('ab', 1),
+),
+('^(.*)xx(.*)$',
+	('ab xx av', 1),
+	('axxv', 1),
+	('xx', 1),
+	('x', 0),
+	('ab x av', 0),
+	('ab x xx', 1),
+	('ab x xx xa', 1),
+),
+#('.+?s',
+#	('..ss', 1),
+#	('ss', 1),
+#	('s', 0),
+#),
+);
+
+from os import system;
+def Run (cmd)
+{
+	print "** Running:", cmd;
+	system (cmd);
+}
+
+if (__name__ == '__main__')
+	for (nn, TEST in enumerate (TESTS[:])) {
+		print "Try:", TEST [0];
+		i = TEST [0];
+		cfile = 'testre%i.c' %nn;
+		F = open (cfile, 'w');
+		FW = F.write;
+		FW ('//***************' + repr (i) + '\n');
+		FW ('// /%s/\n'%i);
+		try {
+			R = Re (i, DOTALL);
+			FW ('//' + str (R.root) + '\n');
+			FW (R.gencode ());
+		} except () {
+			print "SOME ERROR", sys.exc_info ();
+			raise;
+		}
+		FW (CHECKPROG);
+		for (i, r in TEST [1:])
+			FW  ('\tdocheck ("%s", %i);\n' %(i, r));
+		FW ("	return 0;\n}\n");
+		F.flush ();
+		Run ('gcc %s -Wall' %cfile);
+		Run ('./a.out');
+	}

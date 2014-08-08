@@ -1,0 +1,22 @@
+did you break the bootstrap?
+hopelessly fatal breakage?
+
+python to the rescue:
+- Go up, type 'make clean'
+- From this dir type 'python Make.py'
+- Go to ../pyc and do 'python test_bootstrap.py'
+- Go to .. and 'make image'
+
+To test if it's fixed,
+Go .. and 'make clean; make bootstrap'
+
+(how can one break the bootstrap:
+if you modify any of the modules 're', 'posix', 'os', etc
+in a way that they are incompatible with how pyc uses them
+and then you forget to 'make image' before 'make bootstrap',
+voila. broken because the 'image' has the incompatible pycs)
+
+### Generally, if the bootstrap is VERY broken (BIOS broken, etc)
+the trick is to run only .pyc files, never invoke the pyc compiler
+and use python for compiling sources. pyvm development without
+Python is not possible.

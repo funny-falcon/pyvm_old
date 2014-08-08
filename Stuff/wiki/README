@@ -1,0 +1,24 @@
+Very Simple Wiki
+================
+
+This wiki is a useful application of pyvm. It's based on:
+
+	- pyvm stackless runtime
+	- Multithreading BaseHTTPServer
+	- web.py micro framework
+	- site.py wiki engine
+	- python markdown.py
+
+Because pyvm is stackless, this server can handle thousands
+of requests (python threads) with just 3 OS threads and that
+makes it perfect for people who have a restricted, non-root
+unix account. And the performance may be quite good as well.
+
+Also, if we compile an optimized-for-size pyvm binary and include
+all the necessary .pyc files and a minimized libc and a specially
+compiled kernel, we can have wiki-in-a-floppy, which is something
+extremely useful and many people have been anxiously waiting for
+it for a long time!
+
+
+In the future everybody will write their own wiki engine?

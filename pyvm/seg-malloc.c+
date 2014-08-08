@@ -1,0 +1,449 @@
+/*
+ *
+ * general purpose segmented allocator
+ *
+ * the libc's malloc is most interested in space efficiency at 'acceptable'
+ * speed, and rightly so since malloc is a space function.
+ * But malloc does take time and we'll lose in all benchmarks if we use
+ * plain libc's malloc against custom allocators, since moreover pyvm will
+ * be tested in programs with millions of small allocs due to its data model.
+ *
+ * this is the segmented allocator. Most important thing is that allocations
+ * of the same size (8,16,24,..) are groupped together and this avoids the
+ * fragmentation of memory caused in the simple malloc.  allocating/freeing
+ * memory for such requests is done in one step. same for realloc.
+ *
+ * unlike python's obmalloc, we don't use arenas and try to return
+ * segments to the OS if many are unused. Although, there are situations where
+ * this allocator may actually hold more memory than py-obmalloc.
+ *
+ */
+extern "stdio.h" {
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+}
+extern "stdlib.h" { }
+extern "string.h" { }
+#include "mallok.h"
+#include "inits.h"
+extern int posix_memalign (void**, int, int);
+#include "seg-malloc.h"
+#define if_unlikely(...) if (__builtin_expect (__VA_ARGS__, 0))
+
+/*
+ * very useful macro to catch double-free
+ * If things go really wrong, enable.
+ * double-free means refcounting is broken
+ */
+//#define CHECK_DOUBLE_FREE
+
+#define COLS "\033[01;37m"
+#define COLE "\033[0m"
+
+#define KB *1024
+#define WORD *sizeof(long)
+
+/*** tunable parameters ***/
+
+/*** Block size 32k ***/
+#define BLOCKSIZE (32 KB)
+
+/* total memory we can get is 128*128*32kB = 512MB
+ * standard wasteage is 2*128*4 = 1kB
+ */
+#define GLOBDISP 128
+
+#define SEGMASK (~(BLOCKSIZE - 1))
+#define NBLOCKS (BLOCKSIZE - 8 WORD) / sizeof (_block)
+
+typedef unsigned int segID;
+
+static int n_segments;
+
+int seg_n_segments ()
+{
+	return n_segments;
+}
+
+class segment
+{
+typedef	_block = 0;
+	segID ID;
+	segment *next, *prev;
+	int used, max, fill, bs;
+	void *ffree;
+auto	_block chunk [NBLOCKS];
+
+	void init ();
+auto	segment ();
+	~segment ();
+};
+
+static inline int size_to_class (int s)
+{
+	return s < 128 ? s >> 3 : (s >> 4) + 8;
+}
+
+/* --------------* lookup verifiers *-------------- */
+
+/*
+ * In order to check if an address is allocated
+ * with a segment, we use double-check verification.
+ * Each segment has a pointer to its "Verify" index
+ * and each "Verify" entry points to a segment.
+ * If these two agree we are in a segment alright, but
+ * if they don't, we may have accessed uninitialized memory.
+ */
+
+union segptr {
+	segment *S;
+	segID next_free;
+};
+
+static union segptr Tbl0 [GLOBDISP];
+static union segptr *Verify [GLOBDISP] = { Tbl0, };
+static segID avail, max_ID;
+static unsigned int max_ver;
+
+static inline union segptr *verifier (int i)
+{
+	return &Verify [i / GLOBDISP][i % GLOBDISP];
+}
+
+static void init_verifier (int t)
+{
+#ifdef	CHECK_DOUBLE_FREE
+fprintf (stderr, "initverifier (%i)\n", t);
+#endif
+	int i;
+	union segptr *Tbl = Verify [t];
+	t *= GLOBDISP;
+	for (i = 0; i < GLOBDISP - 1; i++)
+		Tbl [i].next_free = t + i + 1;
+	Tbl [i].next_free = -1;
+	avail = t;
+	max_ID = t + i;
+}
+
+static class InitMem : InitObj {
+	int priority = INIT_MEMORY;
+	void todo ()
+	{
+		init_verifier (0);
+	}
+};
+
+static void extend_verifiers ()
+{
+	Verify [++max_ver] = (union segptr*) __malloc (sizeof Tbl0);
+	init_verifier (max_ver);
+}
+
+static inline segment *__segmentof (void *p)
+{
+	return (segment*) ((long) p & SEGMASK);
+}
+
+static segment *__in_segment (void *p)
+{
+	/* may cause uninitialized memory access
+	 */
+	segment *s = (segment*) ((long) p & SEGMASK);
+	segID ID = s->ID;
+	return ID <= max_ID && verifier (ID)->S == s ? s : 0;
+}
+
+/* ------------------------------------------------ */
+
+static inline segment *alloc_segment ()
+{
+	void *ptr;
+	if_unlikely (!(ptr = __memalign (BLOCKSIZE, BLOCKSIZE))) {
+		/* In modern OSs, malloc never fails.
+		 * Instead the process is killed if there's no memory.
+		 * So do the same here instead of throwing'n stuff.
+		 * Still, we can raise some interrupt but the malloc path
+		 * should be considered non-throwing (and local REFPTRs
+		 * not protected for unwind). We'd like some exception
+		 * that cannot be caught in order to do this though.
+		 */
+		fprintf (stderr, "OUT OF MEMORY:(");
+		exit (1);
+	}
+	return ptr;
+}
+
+void segment.init ()
+{
+	if (avail == -1)
+		extend_verifiers ();
+	ID = postfix (avail, avail = verifier (avail)->next_free);
+	verifier (ID)->S = this;
+	fill = used = 0;
+	prev = next = 0;
+}
+
+segment.segment ()
+{
+	++n_segments;
+	max = NBLOCKS;
+	ffree = &chunk [0];
+	chunk [0].next = 0;
+	bs = size_to_class (sizeof (_block) - 1);
+}
+
+segment.~segment ()
+{
+	--n_segments;
+	verifier (ID)->next_free = avail;
+	avail = ID;
+}
+
+#define DEFSEG(X) \
+	struct chunk ## X { union {\
+		char block [X];\
+		void *next;\
+		}; };\
+	static inline class segment ## X : segment {\
+	typedef chunk ## X _block;\
+	};
+
+DEFSEG(8)   DEFSEG(16)  DEFSEG(24)  DEFSEG(32)
+DEFSEG(40)  DEFSEG(48)  DEFSEG(56)  DEFSEG(64)
+DEFSEG(72)  DEFSEG(80)  DEFSEG(88)  DEFSEG(96)
+DEFSEG(104) DEFSEG(112) DEFSEG(120) DEFSEG(128)
+DEFSEG(144) DEFSEG(160) DEFSEG(176) DEFSEG(192)
+DEFSEG(208) DEFSEG(224) DEFSEG(240) DEFSEG(256)
+
+#define MAX_SEG_ALLOC 256
+
+static inline void *segment8.offsetof_last_unfilled (int sz)
+{
+	return ((void*) chunk) + sz * fill;
+}
+
+static segment *freeseg [24];
+static segment *usable [24];
+static int sizes [] = {
+	8,16,24,32,40,48,56,64,72,80,88,96,104,112,120,128,144,160,176,192,208,224,240,256
+};
+
+void segment.mvto_usable (int n)
+{
+	prev = 0;
+	if ((next = usable [n]))
+		next->prev = this;
+	usable [n] = this;
+}
+
+void segment.rmfrom_usable (int n)
+{
+	if (next) next->prev = prev;
+	if (prev) prev->next = next;
+	else usable [n] = next;
+}
+
+void segment.rmfirstfrom_usable (int n)
+{
+	if ((usable [n] = next)) next->prev = 0;
+}
+
+template fixed_alloc(N) {
+	/*** inline seg_alloc for very common known sizes ***/
+	void *seg_alloc >< N ()
+	{
+		segment *s;
+		if ((s = usable [size_to_class (N - 1)]) && *(void**) s->ffree) {
+			++s->used;
+			return postfix (s->ffree, s->ffree = *(void**) s->ffree);
+		}
+		return seg_alloc (N);
+	}
+}
+
+fixed_alloc (96)
+fixed_alloc (56)
+fixed_alloc (32)
+fixed_alloc (24)
+
+void * FASTCALL1 seg_alloc (unsigned int c)
+{
+	void *ret;
+	segment *s;
+
+	if (c > MAX_SEG_ALLOC) return __malloc (c);
+
+	unsigned int n = size_to_class (c - 1);
+
+	s = usable [n];
+	if (s) have_usable: {
+		++s->used;
+		ret = s->ffree;
+		if (*(void**) ret) {
+			s->ffree = *(void**) ret;
+			return ret;
+		}
+		if (++s->fill < s->max) {
+			s->ffree = ((segment8*) s)->offsetof_last_unfilled (sizes [n]);
+			*(void**) s->ffree = 0;
+			return ret;
+		}
+		s->ffree = 0;
+		s->rmfirstfrom_usable (n);
+		return ret;
+	}
+
+	if ((s = freeseg [n])) {
+		freeseg [n] = 0;
+		s->mvto_usable (n);
+		goto have_usable;
+	}
+
+	s = alloc_segment ();
+	s->init ();
+	usable [n] = s;
+	switch (n) {
+#define NEWSEG(X,Y) case X: ((segment ## Y*)s)->ctor (); goto have_usable;
+	NEWSEG(0,8)    NEWSEG(1,16)   NEWSEG(2,24)   NEWSEG(3,32)   NEWSEG(4,40) NEWSEG(5,48)
+	NEWSEG(6, 56)  NEWSEG(7, 64)  NEWSEG(8,72)   NEWSEG(9,80)   NEWSEG(10,88) NEWSEG(11,96)
+	NEWSEG(12,104) NEWSEG(13,112) NEWSEG(14,120) NEWSEG(15,128)
+	NEWSEG(16,144) NEWSEG(17,160) NEWSEG(18,176)
+	NEWSEG(19,192) NEWSEG(20,208) NEWSEG(21,224) NEWSEG(22,240) NEWSEG(23,256) 
+	}
+
+	return 0;
+}
+
+/* free something which is definitelly smaller than 256 bytes
+   and consequently definitelly in a segment  */
+void FASTCALL1 seg_freeXX (void *p)
+{
+	segment *s = __segmentof (p);
+#ifdef	CHECK_DOUBLE_FREE
+	{
+		void *xx = s->ffree;
+		while (xx) {
+			if (xx == p) {
+				fprintf (stderr, "Double free\n");
+				*(int*)0 = 0;
+			}
+			xx = *(void**)xx;
+		}
+	}
+#endif
+
+	if (s->used < s->max && s->used > 1) {
+		--s->used;
+		*(void**)p = s->ffree;
+		s->ffree = p;
+		return;
+	}
+	seg_free_segmented (s, p);
+}
+
+
+static void seg_free_segmented (segment *s, void *p)
+{
+#ifdef	CHECK_DOUBLE_FREE
+	{
+		void *xx = s->ffree;
+		while (xx) {
+			if (xx == p) {
+				fprintf (stderr, "Double free\n");
+				*(int*)0 = 0;
+			}
+			xx = *(void**)xx;
+		}
+	}
+#endif
+
+	*(void**)p = s->ffree;
+	s->ffree = p;
+	if (s->used-- < s->max) {
+		if (s->used)
+			return;
+		if (!s->next && !s->prev)
+			return;
+		if (!freeseg [s->bs]) {
+			s->rmfrom_usable (s->bs);
+			freeseg [s->bs] = s;
+			return;
+		}
+		s->rmfrom_usable (s->bs);
+		delete s;
+		return;
+	}
+	s->mvto_usable (s->bs);
+}
+
+void FASTCALL1 seg_free (void *p)
+{
+	segment *s;
+
+	if ((s = __in_segment (p)))
+		seg_free_segmented (s, p);
+	else	__free (p);
+}
+
+/* The client is not required to store the size of the allocated quantity
+   but if it knows it this is a useful hint for the allocator.  */
+void FASTCALL2 seg_free (void *p, unsigned int s)
+{
+	if (s <= MAX_SEG_ALLOC) seg_freeXX (p);
+	else __free (p);
+}
+
+void *seg_realloc (void *p, unsigned int c)
+{
+	segment *s;
+	void *r;
+
+	if ((s = __in_segment (p))) {
+		if (c <= MAX_SEG_ALLOC) {
+			unsigned int n = size_to_class (c - 1);
+			if (n == s->bs) return p;
+			memcpy (r = seg_alloc (c), p, c);
+			seg_free_segmented (s, p);
+			return r;
+		}
+		memcpy (r = __malloc (c), p, sizes [s->bs]);
+		seg_free_segmented (s, p);
+		return r;
+	}
+
+	if (c <= MAX_SEG_ALLOC) {
+		memcpy (r = seg_alloc (c), p, c);
+		__free (p);
+		return r;
+	}
+	return __realloc (p, c);
+}
+
+void *seg_realloc2 (void *p, unsigned int o, unsigned int c)
+{
+	segment *s;
+	void *r;
+
+	if (o <= MAX_SEG_ALLOC) {
+		s = __segmentof (p);
+		if (c <= MAX_SEG_ALLOC) {
+			unsigned int n = size_to_class (c - 1);
+			if (n == s->bs) return p;
+			memcpy (r = seg_alloc (c), p, c);
+			seg_free_segmented (s, p);
+			return r;
+		}
+		memcpy (r = __malloc (c), p, sizes [s->bs]);
+		seg_free_segmented (s, p);
+		return r;
+	}
+
+	if (c <= MAX_SEG_ALLOC) {
+		memcpy (r = seg_alloc (c), p, c);
+		__free (p);
+		return r;
+	}
+	return __realloc (p, c);
+}
+

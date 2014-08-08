@@ -1,0 +1,133 @@
+extern "sys/time.h" {
+#include <sys/time.h>
+}
+extern "math.h" {
+#include <math.h>
+}
+
+#include "dynlib.h"
+
+/* clock */
+
+_module __object__ *clock_time ()
+{
+	return new FloatObj ((double) clock () / CLOCKS_PER_SEC);
+}
+
+/* time */
+
+_module __object__ *time_time ()
+{
+	struct timeval t;
+	gettimeofday (&t, 0);
+	return new FloatObj ((double) t.tv_sec + (double) t.tv_usec * 0.000001);
+}
+
+/* strftime */
+
+_module __object__ *strftime_time (REFPTR argv[])
+{
+	char *fmt = argv [0].check_string ()->str;
+	Tuplen *T = Tuplen.checkedcast (argv [1].o);
+
+	if (T->len != 9)
+		RaiseNotImplemented ("strftime error");
+
+	struct tm TM;
+
+	TM.tm_year = IntObj.cast (T->__xgetitem__ (0))->i - 1900;
+	TM.tm_mon = IntObj.cast (T->__xgetitem__ (1))->i - 1;
+	TM.tm_mday = IntObj.cast (T->__xgetitem__ (2))->i;
+	TM.tm_hour = IntObj.cast (T->__xgetitem__ (3))->i;
+	TM.tm_min = IntObj.cast (T->__xgetitem__ (4))->i;
+	TM.tm_sec = IntObj.cast (T->__xgetitem__ (5))->i;
+	TM.tm_wday = (IntObj.cast (T->__xgetitem__ (6))->i + 1) % 7;
+	TM.tm_yday = IntObj.cast (T->__xgetitem__ (7))->i - 1;
+	TM.tm_isdst = IntObj.cast (T->__xgetitem__ (8))->i;
+
+	char buffer [100];
+	return new StringObj binctor (buffer, strftime (buffer, sizeof buffer - 1, fmt, &TM));
+}
+
+/* sleep
+ *
+ * Generally, time.sleep() does not guarantee any accuracy;
+ * it's more like "delay at least for ..."
+ *
+ */ 
+
+extern __object__ *vmsleep (int);
+
+_module __object__ *TimeTravel (REFPTR argv[])
+{
+	double future = FloatObj.isinstance (argv [0].o) ? argv [0].as_double->f
+		: IntObj.checkedcast (argv [0].o)->i;
+	struct timeval t;
+	t.tv_sec = floor (future);
+	t.tv_usec = fmod (future, 1.0) * 1000000.0;
+
+	/* vmpoll has milisecond precision */
+	if (0 && CAN_VMPOLL && (t.tv_sec || t.tv_usec > 1000))
+		return vmsleep (t.tv_sec * 1000 + t.tv_usec / 1000);
+
+	RELEASE_GIL
+	select (0, 0, 0, 0, &t);
+	ACQUIRE_GIL
+
+	return &None;
+}
+
+/* localtime, gmtime */
+
+_module __object__ *localtime_time (REFPTR argv[], int argc)
+{
+	return local_or_gm (argv, argc, localtime);
+}
+
+_module __object__ *gmtime_time (REFPTR argv[], int argc)
+{
+	return local_or_gm (argv, argc, gmtime);
+}
+
+_module __object__ *local_or_gm (REFPTR argv[], int argc, struct tm *(*f)(const time_t*))
+{
+	time_t t;
+	if (!argc) t = time (0);
+	else if (IntObj.isinstance (argv [0].o)) t = argv [0].as_int->i;
+	else t = (time_t) FloatObj.checkedcast (argv [0].o)->f;
+
+	struct tm *T = f (&t);
+	return new Tuplen (
+		newIntObj (T->tm_year + 1900),
+		newIntObj (T->tm_mon + 1),
+		newIntObj (T->tm_mday),
+		newIntObj (T->tm_hour),
+		newIntObj (T->tm_min),
+		newIntObj (T->tm_sec),
+		newIntObj ((T->tm_wday + 6) % 7),
+		newIntObj (T->tm_yday + 1),
+		newIntObj (T->tm_isdst)
+	);
+}
+
+/* module */
+
+static bltinfunc funcs [] = {
+	{ "clock",	0, clock_time, 0 },
+	{ "localtime",	SETARGC (0, 1), localtime_time, 0 },
+	{ "gmtime",	SETARGC (0, 1), gmtime_time, 0 },
+	{ "time",	0, time_time, 0 },
+	{ "sleep",	SETARGC (1, 1), TimeTravel, 0 },
+	{ "strftime",	SETARGC (2, 2), strftime_time, 0 },
+	BSENTINEL
+};
+
+slowcold __object__ *import_time ()
+{
+	ModuleObj *ns = new ModuleObj BltinModule ("time", funcs);
+	ns->AddAttributes (("daylight", &TrueObj));
+
+	ns->setattr (new_interned ("tzname", 6), new Tuplen (new StringObj ("NOTZ"),
+			 new StringObj ("NOTZ")));
+	return ns;
+}

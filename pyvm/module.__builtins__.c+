@@ -1,0 +1,992 @@
+extern "ctype.h" {
+#include <ctype.h>
+#include <math.h>
+}
+extern "math.h" { }
+
+#include "dynlib.h"
+#include "py_opcodes.h"
+#include "funcwrapper.h"	// map needs that but the right way is w/o BuiltinCallable
+
+/************************** pyvm debug builtins ********************/
+
+/* If SIMPLE_TRACE is enabled && DebugVM==1 we get tracing */
+
+int DebugVM=0;//DEBUGVM;
+
+#ifndef OPTIMIZEVM
+
+_module __object__ *__printstack_builtin ()
+{
+	extern void printstack ();
+	printstack ();
+	return &None;
+}
+
+_module __object__ *__segfault_builtin ()
+{
+	CRASH
+}
+
+#endif
+
+extern void whereami ();
+
+_module __object__ *___debug_on_builtin (REFPTR argv[], int argc)
+{
+	DebugVM = argc ? argv [0]->Bool () : 1;
+	return &None;
+}
+
+_module __object__ *__whereami_builtin ()
+{
+	whereami ();
+	return &None;
+}
+
+extern __object__ *raw_input ();
+
+/* ----* sorted *---- */
+
+#if 1
+_module __object__ *sorted_builtin (REFPTR argv[], int argc)
+{
+	if_unlikely (argc > 1)
+		RaiseNotImplemented ("sorted with arguments");
+
+	ListObj *L;
+	if (TupleObj.typecheck (argv [0].o))
+		L = argv [0].as_tuple->to_list ();
+	else if (StringObj.isinstance (argv [0].o))
+		L = argv [0].as_string->to_list ();
+	else RaiseNotImplemented ("sorted on this");
+
+	REFPTR xx = L;
+	L->sort ();
+	return xx.Dpreserve ();
+}
+#endif
+
+/* ----* abs *---- */
+
+_module __object__ *abs_builtin (REFPTR argv[])
+{
+	/* a lesson to learn: don't create new objects if you can! */
+	if (IntObj.isinstance (argv [0].o))
+		return argv [0].as_int->i >= 0 ? argv [0].o : newIntObj (-argv [0].as_int->i);
+	return FloatObj.fcheckedcast (argv [0].o)->f >= 0 ?
+		 argv [0].o : new FloatObj (-argv [0].as_double->f);
+}
+
+/* ----* globals ... near boot_pyvm() *---- */
+
+modsection __object__ *globals_builtin ();
+__object__ *locals_builtin ();
+
+/* ----* bool *---- */
+
+_module __object__ *bool_builtin (REFPTR argv[])
+{
+	return (IntObj.isinstance (argv [0].o) ? argv [0].as_int->i : argv [0]->Bool ())
+		 ? &TrueObj : &FalseObj;
+}
+
+/* ----* dir *---- */
+
+_module __object__ *dir_builtin (REFPTR argv[], int argc)
+{
+	if (!argc) {
+		/* XXXX: errorneous -- use current globals */
+		REFPTR xx = globalocals->keys()->sort ();
+		return xx.Dpreserve ();
+	}
+	if (NamespaceObj.typecheck (argv [0].o))
+		return argv [0].as_ns->__dict__.as_dict->keys ()->sort();
+	RaiseNotImplemented ("dir() on this");
+}
+
+/* ----* len *---- */
+
+_module __object__ *len_builtin (REFPTR argv[])
+{
+	/* inline cases? */
+	return newIntObj (argv [0]->len ());
+}
+
+_module __object__ *hash_builtin (REFPTR argv[])
+{
+	return newIntObj (argv [0]->hash ());
+}
+
+/* ----* file *---- */
+
+_module __object__ *file_builtin (REFPTR argv [], int argc)
+{
+	/*XXXX: This must be in FileObj.type_call()
+	*******************************************/
+	char *mode = "r";
+	__object__ *fn = argv [0].o;
+	if (argc > 1)
+		mode = argv [1].check_string ()->str;
+	int flags;
+
+	if (!strcmp (mode, "r") || !strcmp (mode, "rb"))
+		flags = $O_RDONLY;
+	else if (!strcmp (mode, "w+") || !strcmp (mode, "wb"))
+		flags = $O_WRONLY|$O_TRUNC|$O_CREAT;
+	else if (!strcmp (mode, "w"))
+		flags = $O_WRONLY|$O_TRUNC|$O_CREAT;
+	else if (!strcmp (mode, "a"))
+		flags = $O_APPEND|$O_CREAT|$O_WRONLY;
+	else if (!strcmp (mode, "r+"))
+		flags = $O_RDWR;
+	else RaiseNotImplemented ("File in this mode");
+
+	if (IntObj.isinstance (fn))
+		return open_file_fd (IntObj.cast (fn)->i, flags);
+	return open_file (StringObj.fcheckedcast (fn)->str, flags);
+}
+
+/* ----* chr *---- */
+
+_module __object__ *chr_builtin (REFPTR argv[])
+{
+	uint i = (uint) IntObj.fcheckedcast (argv [0].o)->i;
+	if_unlikely (i & ~255/*i < 0 || i > 255*/)
+		RaiseValueError ("chr([0..255])");
+	return char_string (i);
+}
+
+/* ----* hasattr *---- */
+
+_module __object__ *hasattr_builtin (REFPTR argv[])
+{
+	StringObj.fenforcetype (argv [1].o);
+	return argv [0]->hasattr (argv [1].o) ? &TrueObj : &FalseObj;
+}
+
+/* ----* isinstance *---- */
+
+_module __object__ *isinstance_builtin (REFPTR argv [])
+{
+	if (DynClassObj.isinstance (argv [1].o)) {
+		if (!DynInstanceObj.typecheck (argv [0].o))
+			return &FalseObj;
+		DynClassObj *cls = argv [0].as_inst->__class__.as_class;
+		return argv [1].o == cls || cls->isparentclass (argv [1].o) ? &TrueObj : &FalseObj;
+	}
+	return (__object__*) &argv [0]->type == argv [1].o ? &TrueObj : &FalseObj;
+}
+
+/* ord */
+
+extern __object__ *ORD (unsigned char);
+
+_module __object__ *ord_builtin (REFPTR argv[])
+{
+	/* is a small int */
+	StringObj *s = StringObj.fcheckedcast (argv [0].o);
+	if_unlikely (s->len != 1)
+		RaiseValueError ("ord(string must be of length 1)");
+	return ORD (s->str [0]);
+}
+
+/* staticmethod */
+
+_module __object__ *staticmethod_builtin (REFPTR argv[])
+{
+	return new DynStaticMethodObj (argv [0].o);
+}
+
+/* classmethod */
+
+_module __object__ *classmethod_builtin (REFPTR argv[])
+{
+	return new DynClassMethodObj (argv [0].o);
+}
+
+/* max */
+
+_module __object__ *max_builtin (REFPTR argv[], int argc)
+{
+	REFPTR *data;
+	__object__ *mx;
+	int len;
+
+	if (argc > 1) {
+		data = argv;
+		len = argc;
+	} else if (ListObj.isinstance (argv [0].o)) {
+		data = argv [0].as_list->data;
+		len = argv [0].as_list->len;
+	} else RaiseNotImplemented ("max() on list");
+	if_unlikely (!len)
+		RaiseValueError ("max on empty list");
+	mx = data [0].o;
+	for (int i = 1; i < len; i++)
+		if (mx->cmp_GEN (data [i].o) < 0)
+			mx = data [i].o;
+	return mx;
+}
+
+/* round */
+
+_module __object__ *round_builtin (REFPTR argv[], int argc)
+{
+	double x = FloatObj.fcheckedcast (argv [0].o)->f;
+	double f = 1.0;
+	int ndigits = argc == 1 ? 0 : abs (IntObj.fcheckedcast (argv [1].o)->i);
+	int i = ndigits;
+
+	while  (--i >= 0)
+		f = f*10.0;
+	if (ndigits < 0) x /= f;
+	else x *= f;
+	x = x >= 0.0 ? floor (x + 0.5) : ceil (x - 0.5);
+	if (ndigits < 0) x *= f;
+	else x /= f;
+	return new FloatObj (x);
+}
+
+/* min */
+
+_module __object__ *min_builtin (REFPTR argv[], int argc)
+{
+	REFPTR *d;
+	__object__ *mx;
+	int l;
+
+	if (argc > 1) {
+		d = argv;
+		l = argc;
+	} else if (DictObj.isinstance (argv [0].o))
+		return argv [0].as_dict->min_max (0);
+	else {
+		TupleObj *T = TupleObj.checkedcast (argv [0].o);
+		d = T->data;
+		l = T->len;
+	}
+	if_unlikely (!l)
+		RaiseValueError ("min on empty list");
+	mx = d [0].o;
+	for (int i = 1; i < l; i++)
+		if (mx->cmp_GEN (d [i].o) > 0)
+			mx = d [i].o;
+	return mx;
+}
+
+/* cmp */
+
+_module __object__ *cmp_builtin (REFPTR argv[])
+{
+	return newIntObj (argv [0]->cmp_GEN (argv [1].o));
+}
+
+/* iter */
+
+_module __object__ *iter_builtin (REFPTR argv[])
+{
+	return argv [0]->iter ();
+}
+
+_module __object__ *callable_builtin (REFPTR argv[])
+{
+	if_likely (argv [0]->vf_flags & VF_CALLABLE)
+		return &TrueObj;
+	if (DynMethodObj.isinstance (argv [0].o))
+		return &TrueObj;	/* some bug. if we set VF_CALLABLE on DynMethod it breaks all */
+	if (DynInstanceObj.typecheck (argv [0].o)
+	&& argv [0].as_inst->hasattr (Interns.__call__))
+		return &TrueObj;
+	return &FalseObj;
+}
+
+/* reversed */
+
+_module __object__ *reversed_builtin (REFPTR argv[])
+{
+	/* In py this is a class, but *who* cares?? */
+	return ListObj.checkedcast (argv [0].o)->riter ();
+}
+
+/* pow */
+
+extern __object__ *Num_Power (__object__*, __object__*);
+
+_module __object__ *pow_builtin (REFPTR argv[], int argc)
+{
+	if (argc == 3) {
+		int iv = IntObj.fcheckedcast (argv [0].o)->i;
+		int iw = IntObj.fcheckedcast (argv [1].o)->i;
+		int iz = IntObj.fcheckedcast (argv [2].o)->i;
+		if_unlikely (iw < 0)
+			RaiseValueError ("pow 2nd can't be negative");
+		int temp = iv, ix = 1;
+		while (iw > 0) {
+			if (iw & 1)
+				ix *= temp;
+			iw >>= 1;
+			if (!iw) break;
+			temp *= temp;
+			ix %= iz;
+			temp %= iz;
+		}
+		return newIntObj (ix % iz);
+	}
+	return Num_Power (argv [0].o, argv [1].o);
+}
+
+/* zip */
+
+_module __object__ *zip_builtin (REFPTR argv[], unsigned int argc)
+{
+	unsigned int i, j, minl = $LONG_MAX;
+	for (i = 0; i < argc; i++) {
+		if_unlikely (!TupleObj.typecheck (argv [i].o))
+			RaiseTypeError ("zip (seq)");
+		if (minl > argv [i].as_tuple->len) minl = argv [i].as_tuple->len;
+	}
+
+	ListObj *L = new ListObj __sizector (minl);
+	L->len = minl;
+	Tuplen *T;
+	for (i = 0; i < minl; i++) {
+		L->__xinititem__ (i, T = new Tuplen __sizector (argc));
+		for (j = 0; j < argc; j++)
+			T->__xinititem__ (j, argv [j].as_tuple->__xgetitem__ (i));
+	}
+	return L;
+}
+		
+/* map */
+
+static class map_BuiltinObj : BuiltinCallableBase
+{
+	const unsigned int vf_flags |= VF_VMEXEC;
+   public:
+	map_BuiltinObj ()	{ BuiltinCallableBase.ctor ("builtin.map"); }
+	void call (REFPTR, REFPTR [], int);
+};
+
+#if 0
+static	byte map_assembly [] = {
+	LOAD_CONST, BYTEARG(2),
+	GET_ITER,
+	FOR_ITER, BYTEARG(15),		// to label2
+	LOAD_CONST, BYTEARG(1),
+	ROT_TWO,
+	CALL_FUNCTION, BYTEARG(1),
+	LOAD_CONST, BYTEARG(0),
+	ROT_TWO,
+	LIST_APPEND,
+	JUMP_ABSOLUTE, BYTEARG(4),	// to FOR_ITER
+/*label2:*/
+	LOAD_CONST, BYTEARG(0),
+	RETURN_VALUE
+};
+
+static inline_machine_code MAP_CODE;
+
+static class InitBuiltins : InitObj {
+	int priority = INIT_BYTEASM;
+	void todo ()
+	{
+		MAP_CODE.make (map_assembly, sizeof map_assembly);
+	}
+};
+#endif
+
+extern TupleObj *listfromiter (__object__*);
+
+void map_BuiltinObj.call (REFPTR ret, REFPTR argv [], int argc)
+{
+	if_unlikely (argc < 2) RaiseValueError ("map() takes at least 2 argument");
+	if_unlikely (argc > 2) RaiseNotImplemented ("multiple lists in map()");
+
+	REFPTR argv2 [2] = { &None, &None };
+	REFPTR RL;
+	TupleObj *L;
+	if (TupleObj.isinstance (argv [2].o))
+		L = argv [2].as_tuple;
+	else {
+		L = listfromiter (argv [2].o);
+		RL = L;
+	}
+
+//	TupleObj *L = TupleObj.checkedcast (argv [2].o);
+	int len = L->len, i;
+	ListObj *nL = new ListObj __sizector (len);
+
+	/* see if VM_EXEC once */
+	nL->len = len;
+	argv2 [0].ctor (); argv2 [1].ctor ();
+	for (i = 0; i < len; i++) {
+		argv2 [1] = L->__xgetitem__ (i);
+		argv [1]->call (argv2 [0], argv2, 1);
+		if (argv2 [0].o == &CtxSw)
+			argv2 [0] = preempt_pyvm (CtxSw.vm);
+		nL->__inititem_mr (i, argv2 [0]);
+	}
+	ret = nL;
+}
+
+/* repr */
+
+_module __object__ *repr_builtin (REFPTR argv [])
+{
+	return argv [0]->repr ();
+}
+
+/* intern */
+
+_module __object__ *intern_builtin (REFPTR argv[])
+{
+	return intern_string (StringObj.checkedcast (argv [0].o));
+}
+
+/* id */
+
+_module __object__ *id_builtin (REFPTR argv[])
+{
+	return new IntObj ((int) argv [0].o);
+}
+
+/* oct */
+
+_module __object__ *oct_builtin (REFPTR argv[])
+{
+	char tmp [50];
+	sprintf (tmp, "%o", (uint) argv [0].check_int ()->i);
+	return new StringObj (tmp);
+}
+
+/* getattr */
+
+_module __object__ *getattr_builtin (REFPTR argv[], int argc)
+{
+	StringObj.fenforcetype (argv [1].o);
+	if (argc == 2)
+		return argv [0]->getattr (argv [1].o) ?:
+			 RaiseNoAttribute (argv [1].o);
+	/* XXXX: if custom __getattr__ this don't work. Gotta use try ... else ... */
+	return argv [0]->hasattr (argv [1].o) ? argv [0]->getattr (argv [1].o) : argv [2].o;
+}
+
+/* delattr */
+
+_module __object__ *delattr_builtin (REFPTR argv [])
+{
+	StringObj.fenforcetype (argv [1].o);
+	argv [0]->delattr (argv [1].o);
+	return &None;
+}
+
+/* setattr */
+
+_module __object__ *setattr_builtin (REFPTR argv [])
+{
+	StringObj.fenforcetype (argv [1].o);
+	argv [0]->setattr (intern_string (argv [1].as_string), argv [2].o);
+	return &None;
+}
+
+/* enumerate
+ *	We should have enumerate as a fast builtin for its most
+ *	common case which is to iterate over a list and have the
+ *	index in order to modify the elements.
+ *
+ * 	Otherwise we should redirect to izip(count(), iterable)
+ */
+
+static class enumerateObj : iteratorBase
+{
+	TupleObj *T;
+	int i;
+	REFPTR ctup;
+   public:
+	enumerateObj (__object__*);
+	__object__ *xnext ();
+	int len ();
+trv	void traverse ();
+};
+
+enumerateObj.enumerateObj (__object__ *t)
+{
+	ctup.ctor (new Tuplen (&None, &None));
+	T = TupleObj.cast (t);
+	iteratorBase.ctor (t);
+	i = 0;
+}
+
+void enumerateObj.traverse ()
+{
+	iteratorBase.traverse ();
+	ctup.traverse_ref ();
+}
+
+__object__ *enumerateObj.xnext ()
+{
+	if_unlikely (i >= T->len)
+		RaiseStopIteration ();
+	if (ctup->refcnt == 1) {
+		ctup.as_tuplen->__xsetitem__ (0, newIntObj (i));
+		ctup.as_tuplen->__xsetitem__ (1, T->data [i++].o);
+	} else {
+		ctup = new Tuplen (newIntObj (i), T->data [i].o);
+		++i;
+	}
+	return ctup.o;
+}
+
+int enumerateObj.len ()
+{
+	return T->len - i <= 0 ? 0 : T->len - i;
+}
+
+_module __object__ *enumerate_builtin (REFPTR argv[])
+{
+	if_unlikely (!TupleObj.typecheck (argv [0].o))
+		RaiseNotImplemented ("can enumerate list/tuple only");
+	return new enumerateObj (argv [0].o);
+}
+
+/* divmod */
+
+_module __object__ *divmod_builtin (REFPTR argv[])
+{
+	int x = IntObj.fcheckedcast (argv [0].o)->i, y = IntObj.fcheckedcast (argv [1].o)->i;
+	return new Tuplen (newIntObj (x/y), newIntObj (x%y));
+}
+
+/* sum 
+ *	sum is a good builtin because it can speed up a very
+ *	common algorithm which can't be done with miniJIT.
+ *	Our goal is to super-optimize the most common case while
+ *	being fast at the general case.
+ */
+
+_module __object__ *sum_builtin (REFPTR argv[], int argc)
+{
+	if (argc == 1 || IntObj.isinstance (argv [0].o)) {
+		int sum = argc == 1 ? 0 : argv [0].as_int->i;
+		if (TupleObj.typecheck (argv [0].o)) {
+			TupleObj *T = argv [0].as_tuple;
+			int to = T->len, i;
+			for (i = 0; i < to; i++)
+				if_likely (IntObj.isinstance (T->__xgetitem__ (i)))
+					sum += IntObj.cast (T->__xgetitem__ (i))->i;
+				else {
+					float fsum = sum;
+					for (; i < to; i++)
+						fsum += T->__xgetitem__ (i)->todouble ();
+					return new FloatObj (fsum);
+				}
+			return newIntObj (sum);
+		}
+
+		volatile int vsum = sum;	/* gcc bug */
+		volatile float vfsum;
+		volatile bool visfsum = false;
+		try (Interrupt *Int) {
+			REFPTR I = argv [0]->iter (), O;
+			__object__ *i = I.o;
+			for (;;) {
+				O = i->next ();
+				if_likely (IntObj.isinstance (O.o))
+					vsum += O.as_int->i;
+				else {
+					vfsum = vsum;
+					visfsum = true;
+					for (;;) {
+						vfsum += O->todouble ();
+						O = I->next ();
+					}
+				}
+			}
+		} else catch_stop_iteration (Int);
+		return visfsum ? OCC new FloatObj (vfsum) : OCC newIntObj (vsum);
+	}
+	if (StringObj.isinstance (argv [1].o))
+		RaiseNotImplemented ("can't sum strings [use ''.join (seq) instead] (but why?)");
+
+	TupleObj *T = TupleObj.checkedcast (argv [0].o);
+	ListObj *L = ListObj.checkedcast (argv [1].o);
+	int llen = L->len;
+	for (int i = 0; i < T->len; i++)
+		llen += TupleObj.checkedcast (T->__xgetitem__ (i))->len;
+	return new ListObj list_concat (L->data, L->len, T->data, T->len, llen);
+}
+
+static void ListObj.list_concat (REFPTR *st, int sl, REFPTR *d, int n, int llen)
+{
+	int i, l, k;
+
+	__sizector (llen);
+	len = llen;
+	memcpy (data, st, (l = sl) * sizeof (REFPTR*));
+	for (i = 0; i < n; i++) {
+		k = d [i].as_tuple->len;
+		memcpy (data + l, d [i].as_tuple->data, k * sizeof (REFPTR*));
+		l += k;
+	}
+	for (i = 0; i < l; i++)
+		data [i].incref ();
+}
+
+/* compile 
+ *	import pyc, initialize if not initialized, replace
+ *	 __builtin__.compile with pyc.compile
+ *
+ *	Property: we want to avoid importing the pyc compiler
+ *	until we really need it because loading/initializing
+ *	the compiler does take time (very little but still
+ *	20 times more than pyvm's standard startup time)
+ */
+
+extern __object__ *import_module (__object__*, bool=0);
+
+static __object__ *pyc, *pyc_eval_ast;
+
+slow static void import_compiler ()
+{
+	if (pyc)
+		return;
+	CtxSw.vm = 0;
+	__object__ *_pyc = import_module (Interns.pyc);
+	if (CtxSw.vm)
+		preempt_pyvm (CtxSw.vm);
+	if (!_pyc->getattr (Interns.compile))
+		return;
+	pyc = _pyc;
+	__builtin__->setattr (Interns.compile, pyc->getattr (Interns.compile));
+	pyc_eval_ast = pyc->getattr (Interns.eval_ast);
+}
+
+_module __object__ *compile_builtin (REFPTR argv[], int argc)
+{
+	import_compiler ();
+	if_unlikely (!pyc)
+		RaiseNotImplemented ("can't use the compile builtin, pyc not bootstrapped");
+	__object__ *compile = pyc->getattr (Interns.compile);
+	REFPTR ret;
+	compile->call (ret, argv - 1, argc);
+	return ret.Dpreserve ();
+}
+
+char *compileFile (const char *fnm)
+{
+	/*
+	 * This is the critical part of the bootstrapping procedure.
+	 * the global 'pyc' will be NULL until the entire pyc package
+	 * has been fully imported.  import_compiler() tries to import
+	 * pyc with preemption; until this returns 'pyc' will be NULL.
+	 * If we return 0, it means that the compiler is not available
+	 * and therefore pyvm will attempt to load .pyc files even if
+	 * the timestamp is older than the .py file.
+	 */
+static	REFPTR xx;
+	/* this is preemptive. hmpf */
+	import_compiler ();
+	if (!pyc)
+		return 0;
+	__object__ *compileFile = pyc->getattr (Interns.compileFile_internal);
+	REFPTR f = new StringObj (fnm), ret;
+	compileFile->call (ret, &f - 1, 1);
+	xx = preempt_pyvm (CtxSw.vm);
+	return xx.as_string->str;
+}
+
+/* eval */
+
+/* eval works together with pyc, or at least it expects to load a compiled
+ * module which provides a function called eval_ast which can evaluate a string
+ * expression in bytecode.
+ */
+
+extern __object__ *fLOAD_NAME (StringObj*);
+
+_module __object__ *eval_builtin (REFPTR argv[], int argc)
+{
+	if (argc == 1 && StringObj.typecheck (argv [0].o)) {
+		/* Case "eval('x')" used to lookup a name */
+		StringObj *S = StringObj.cast (argv [0].o);
+		for (int i = 0; i < S->len; i++)
+			if (!isalpha (S->str [i]))
+				goto nofast;
+		return fLOAD_NAME (S);
+	}
+nofast:
+	if (StringObj.isinstance (argv [0].o)) {
+		if (!pyc_eval_ast)
+			import_compiler ();
+		if_unlikely (!pyc)
+			RaiseNotImplemented ("can't use the eval builtin, pyc not bootstrapped");
+		REFPTR ret;
+		pyc_eval_ast->call (ret, argv - 1, argc);
+		return ret.Dpreserve ();
+	}
+	PyCodeObj.enforcetype (argv [0].o);
+	DictObj *globaldict, *localdict;
+	if (argc == 1 || argv [1].o == &None) {
+		globaldict =  DictObj.cast (globals_builtin ());
+		localdict = DictObj.cast (locals_builtin ());
+	} else {
+		globaldict = DictObj.checkedcast (argv [1].o);
+		localdict = argc == 2 || argv [2].o == &None ? globaldict :
+				 DictObj.checkedcast (argv [2].o);
+		/* we don't really need that. __builtins__ are accessed directly from
+		 * the global __builtins__ object. If one wants to get the __builtins__
+		 * dictionary, we could create a circular reference from within it.
+		 */
+		if (!globaldict->contains (Interns.__builtins__))
+			globaldict->xsetitem (Interns.__builtins__, __builtins__.o);
+	}
+	__object__ *F = new PyFuncObj (argv [0].o, globaldict, localdict);
+	REFPTR ret;
+	F->call (ret, argv, 0);
+	return ret.Dpreserve ();
+}
+
+/* __exec__ builtin:
+ * the EXEC_STMT opcode should be removed and replaced by a function call to
+ * __exec__ ().
+ */
+
+__object__ *__exec___builtin (REFPTR argv[], int argc)
+{
+	if (StringObj.isinstance (argv [0].o)) {
+		REFPTR cargv [] = { argv [0].o, Interns.exec, Interns.exec };
+		compile_builtin (cargv, 3);
+		argv [0] = preempt_pyvm (CtxSw.vm);
+	}
+	return eval_builtin (argv, argc);
+}
+
+/* __import__ */
+
+extern void IMPORT_GUARDED (__object__*);
+
+_module __object__ *__import___builtin (REFPTR argv[], int argc)
+{
+	if (argc != 1)
+		RaiseNotImplemented ("__import__ with more than one arguments");
+	StringObj.enforcetype (argv [0].o);
+	IMPORT_GUARDED (argv [0].o);
+	return &CtxSw;
+}
+
+/*
+ * __import_compiled__ (filename, __name__)
+ *
+ * execute the pyc file pointed by filename (doesn't use sys.modules)
+ * doesn't recompile the source file.
+ * set the namespace's __name__ to __name__.
+ * doesn't use the import lock.
+ *
+ * That's basically useful for the BIOS. Outside that use at their own risk
+ */
+_module __object__ *__import_compiled___builtin (REFPTR argv[])
+{
+extern	REFPTR devnull;
+	char *fnm = argv [0].check_string ()->str;
+	__object__ *rootobj = load_compiled (fnm, new ModuleObj (argv [0].o, argv [1].o));
+	if (!rootobj)
+		return &None;
+	PyCodeObj *code = PyCodeObj.checkedcast (rootobj);
+	DictObj *globs = new DictObj;
+	PyFuncObj *func = new PyFuncObj ((__object__*) code, globs, globs);
+
+	globs->xsetitem (Interns.__name__, argv [1].o);
+	globs->xsetitem (Interns.__builtins__, __builtins__.as_ns->__dict__.o);
+	globs->xsetitem (Interns.__file__, argv [0].o);
+
+	func->call (devnull, &devnull, 0);
+
+	return &CtxSw;
+}
+
+/* */
+
+static __object__ *mk_stdexc (ModuleObj D, const char *en, int el, __object__ *bases [...])
+{
+	Tuplen *c = new Tuplen (basesv, basesc);
+	StringObj *N = new_interned (en, el);
+	DynClassObj *C = new DynClassObj (new DictObj, c, N);
+	C->inf ();
+	D.setattr (N, C);
+	return C;
+}
+
+modsection __object__ *range_builtin (REFPTR [], int);
+modsection __object__ *xrange_builtin (REFPTR [], int);
+
+/* module */
+
+static const bltinfunc funcs [] = {
+	{"abs",		SETARGC (1, 1), abs_builtin, 0},
+	{"bool",	SETARGC (1, 1), bool_builtin, 0},
+	{"callable",	SETARGC (1, 1), callable_builtin, 0},
+	{"classmethod",	SETARGC (1, 1), classmethod_builtin, 0},
+	{"getattr",	SETARGC (2, 3), getattr_builtin, 0},
+	{"chr",		SETARGC (1, 1), chr_builtin, 0},
+	{"cmp",		SETARGC (2, 2), cmp_builtin, 0},
+	{"compile",	SETARGC (3, 5), compile_builtin, 0},
+	{"delattr",	SETARGC (2, 2), delattr_builtin, 0},
+	{"dir",		SETARGC (0, 1), dir_builtin, 0},
+	{"divmod",	SETARGC (2, 2), divmod_builtin, 0},
+	{"enumerate",	SETARGC (1, 1), enumerate_builtin, 0},
+	{"eval",	SETARGC (1, 3), eval_builtin, 0},
+	{"file",	SETARGC (1, 3), file_builtin, 0},
+	{"globals",	SETARGC (0, 0), globals_builtin, 0},
+	{"hasattr",	SETARGC (2, 2), hasattr_builtin, 0},
+	{"hash",	SETARGC (1, 1), hash_builtin, 0},
+	{"id",		SETARGC (1, 1), id_builtin, 0},
+	{"len",		SETARGC (1, 1), len_builtin, 0},
+	{"intern",	SETARGC (1, 1), intern_builtin, 0},
+	{"isinstance",	SETARGC (2, 2), isinstance_builtin, 0},
+	{"iter",	SETARGC (1, 1), iter_builtin, 0},
+	{"locals",	SETARGC (0, 0), locals_builtin, 0},
+	{"max",		SETARGC (1, INFARGC), max_builtin, 0},
+	{"min",		SETARGC (1, INFARGC), min_builtin, 0},
+	{"oct",		SETARGC (1, 1), oct_builtin, 0},
+	{"ord",		SETARGC (1, 1), ord_builtin, 0},
+	{"pow",		SETARGC (2, 3), pow_builtin, 0},
+	{"range",	SETARGC (1, 3), range_builtin, 0},
+	{"raw_input",	SETARGC (0, 1), raw_input, 0},
+	{"repr",	SETARGC (1, 1), repr_builtin, 0},
+	{"reversed",	SETARGC (1, 1), reversed_builtin, 0},
+	{"round",	SETARGC (1, 2), round_builtin, 0},
+	{"setattr",	SETARGC (3, 3), setattr_builtin, 0},
+	{"sorted",	SETARGC (1, 4), sorted_builtin, 0},
+	{"staticmethod",SETARGC (1, 1), staticmethod_builtin, 0},
+	{"sum",		SETARGC (1, 2), sum_builtin, 0},
+	{"zip",		SETARGC (1, INFARGC), zip_builtin, 0},
+	{"xrange",	SETARGC (1, 3), xrange_builtin, 0},
+	{"__exec__",	SETARGC (1, 3), __exec___builtin, 0},
+	{"__import__",	SETARGC (1, 3), __import___builtin, 0},
+	{"__import_compiled__", SETARGC (2, 2), __import_compiled___builtin, 0},
+#ifndef	OPTIMIZEVM
+	{"printstack__",0, __printstack_builtin, 0},
+	{"segfault__", 0, __segfault_builtin, 0},
+#endif
+#if 1
+	{"debug_on",	SETARGC (0, 1), ___debug_on_builtin, 0},
+	{"whereami", 0, __whereami_builtin, 0},
+#endif
+	BSENTINEL
+};
+
+static const char *aliases [] = { "open", "file", 0, };
+static ModuleObj *__builtin__;
+
+extern char **Program_argv;
+extern int Program_argc;
+extern void load_dynExceptions ();
+
+__object__ *TheObject;
+
+/*
+ * Exception class. We make them manually in here and it's almost like
+ * 	class Exception:
+ *	    def __init__ (self, msg=None):
+ *		self.x = msg
+ *	    def __repr__ (self):
+ *		return repr (self.x)
+ */
+
+static __object__ *Exception__init__ (REFPTR argv[], int argc)
+{
+	if (DynInstanceObj.isinstance (argv [0].o))
+		argv [0].as_inst->__dict__.as_dict->xsetitem (Interns.x, argc >= 2 ? argv [1].o : &None);
+	return &None;
+}
+
+static __object__ *Exception__str__ (REFPTR argv[])
+{
+	if (DynInstanceObj.isinstance (argv [0].o)) {
+		DictObj *D = argv [0].as_inst->__dict__.as_dict;
+		__object__ *msg = D->xgetitem_noraise (Interns.x);
+		if (msg)
+			return StringObj.isinstance (msg) ? msg : msg->str ();
+	}
+	return None.str ();
+}
+
+extern REFPTR memfs_root;
+
+__object__ *import_builtins ()
+{
+	ModuleObj *D = new ModuleObj BltinModule ("__builtins__", funcs, aliases);
+
+	D->setattr (new_interned ("int"), &IntTypeObj);
+	D->setattr (new_interned ("long"), &IntTypeObj);
+	D->setattr (new_interned ("str"), &StringTypeObj);
+	D->setattr (new_interned ("unicode"), &StringTypeObj);
+	D->setattr (new_interned ("basestring"), &StringTypeObj);
+	D->setattr (new_interned ("float"), &FloatTypeObj);
+	D->setattr (new_interned ("type"), &TypeTypeObj);
+	D->setattr (new_interned ("list"), &ListTypeObj);
+	D->setattr (new_interned ("dict"), &DictTypeObj);
+	D->setattr (new_interned ("tuple"), &TupleTypeObj);
+	D->setattr (new_interned ("set"), &SetTypeObj);
+	D->setattr (new_interned ("frozenset"), &SetTypeObj);
+	D->setattr (new_interned ("property"), &PropertyTypeObj);
+
+	D->AddAttributes (
+		("False", &FalseObj), ("True", &TrueObj),
+		("__debug__", &FalseObj),
+		("map", new map_BuiltinObj),
+		("None", &None),
+		("super", &None),
+		//("sorted", &None),
+		("__name__", new_interned ("__builtin__")),
+		("__argv__", newIntObj ((int) Program_argv)),
+		("__argc__", newIntObj (Program_argc)),
+		("__memfs__", memfs_root.o),
+		("object", TheObject = (__object__*) 
+			new DynClassObj (new DictObj, NILTuple, new_interned ("object")))
+	);
+	D->setattr (Interns.__builtins__, (__object__*)D);
+
+	/* Exception hierarchy */
+#define mkexc(X,Y) DynExceptions.X = mk_stdexc (D, VSTR(#X), DynExceptions.Y);
+	DynExceptions.Exception = mk_stdexc (D, VSTR ("Exception"));
+	DynExceptions.Exception->setattr (Interns.__init__,
+		 new FuncWrapperObj_iargc (1, Exception__init__, "Exception.__init__"));
+	DynExceptions.Exception->setattr (Interns.__str__,
+		 new FuncWrapperObj_fargc (1, Exception__str__, "Exception.__str__"));
+
+	mkexc (SystemExit, Exception)
+	mkexc (StandardError, Exception)
+	mkexc (StopIteration, Exception)
+	mkexc (AttributeError, StandardError)
+	mkexc (NameError, StandardError)
+	mkexc (TypeError, StandardError)
+	mkexc (EOFError, StandardError)
+	mkexc (EnvironmentError, StandardError)
+	mkexc (KeyboardInterrupt, StandardError)
+	mkexc (ImportError, StandardError)
+	mkexc (IOError, EnvironmentError)
+	mkexc (OSError, EnvironmentError)
+	mkexc (RunTimeError, StandardError)
+	mkexc (NotImplementedError, RunTimeError)
+	mkexc (ValueError, StandardError)
+	mkexc (LookupError, StandardError)
+	mkexc (IndexError, LookupError)
+	mkexc (KeyError, LookupError)
+	mkexc (AssertionError, StandardError)
+	mkexc (SyntaxError, StandardError)
+	mkexc (Warning, Exception)
+	mkexc (RuntimeWarning, Warning)
+	mkexc (DeprecationWarning, Warning)
+	mkexc (RuntimeError, Exception)
+	mkexc (ArithmeticError, StandardError)
+	mkexc (FloatingPointError, ArithmeticError)
+
+	/* make available to interrupt->interrupt2exception () */
+	load_dynExceptions ();
+
+	__builtin__ = D;
+
+	return D;
+}

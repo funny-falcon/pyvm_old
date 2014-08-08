@@ -1,0 +1,72 @@
+Far Yield
+=========
+
+Simple generators can yield values only to their caller.
+With faryield() values are yielded to the innermost active
+far-yield-acceptor.  An example:
+
+	from pyvm_extra import far_yield_acceptor, faryield
+
+	def foo ():
+		faryield ("IN FOO")
+
+	def bar ():
+		faryield (1)
+		foo ()
+		faryield (2)
+
+	for i in far_yield_acceptor (bar):
+		print i
+
+The output of this program is:
+
+	1
+	IN FOO
+	2
+
+The function "far_yield_acceptor (callable, *args, **kwargs)"
+will return a new iterator which will be created by constructing
+a call to the callable with args and kwargs.
+
+A more interesting example:
+
+	def recur (x):
+		faryield (x)
+		if x:
+			recur (x-1)
+
+	for i in far_yield_acceptor (recur, 10):
+		print i
+
+When
+----
+
+In the stackless vm we can freeze the python stack but we can't
+freeze the C stack. This means that we cannot call faryield from
+preemption.  For example, the __hash__() function of an object
+when called from the dictionary lookup code, cannot do faryield!
+
+This shouldn't be a problem unless people have really abused
+operator overloading features.
+
+------
+This is an untested, experimental feature.
+There is a known bug with generators. Although this works:
+
+	def foo ():
+		for i in 'hello':
+			yield i
+			faryield (i)
+
+	def bar ():
+		for i in foo ():
+			pass
+
+	for i in far_yield_acceptor (bar):
+		print i
+		# gc.collect() # will have LEFTOVERS
+
+The Garbage Collector cannot traverse the call chain properly
+if GC is called while iterating the foo generator. That will
+be fixed in the next version, along with any other bugs that will be
+discovered in the meantime.

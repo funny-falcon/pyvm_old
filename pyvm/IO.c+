@@ -1,0 +1,362 @@
+// I/O streams
+//
+// We'll implement our own I/O basically because glibc's fstreams
+// are unacceptably slow due to locking although the case where two
+// different threads read/write to the same stream without synchronization
+// is of zero practical use.
+//
+// Moreover, because of the implementation of pyvm, it is preferrable
+// to do non-blocking read() and write() so we will detect the cases
+// that would block, and use this unfortunate oportunity to open the
+// GIL to another thread.  --Only in the cases syscalls would block!
+//
+//
+
+extern "stdio.h" {
+#include <stdio.h>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
+#include <sched.h>
+#include <fcntl.h>
+#include <sys/select.h>
+}
+extern "unistd.h" { }
+extern "errno.h" { }
+extern "string.h" { }
+extern "sched.h" { }
+extern "fcntl.h" { }
+extern "sys/select.h" { }
+
+#include "IO.h"
+#include "mallok.h"
+#include "seg-malloc.h"
+#include "inits.h"
+#define if_likely(...) if (__builtin_expect (__VA_ARGS__, 1)) 
+#define if_unlikely(...) if (__builtin_expect (__VA_ARGS__, 0)) 
+
+extern void *py_begin_allow_threads ();
+extern void py_end_allow_threads (void*);
+#define RELEASE_GIL void *_v = py_begin_allow_threads ();
+#define ACQUIRE_GIL py_end_allow_threads (_v);
+
+//#define DEBUNK
+#define STD stderr
+#define ncase break; case
+
+/******************************************************************************
+	utilitie routines
+******************************************************************************/
+
+void set_nonblocking (int fd)
+{
+	fcntl (fd, F_SETFL, fcntl (fd, F_GETFL) | O_NONBLOCK);
+}
+
+/******************************************************************************
+	write buffering -- output streams
+******************************************************************************/
+// seriously, two different threads writting on the same file descriptor without
+// synchronization are not an option.  The result is not deterministic and therefore
+// as good as random noise.  The only case where two threads may write to the same
+// fd without synchronization is standard output or generally logging streams.
+//
+// pyvm ensures that only one thread may write data to an FD.
+// the interesting case is when the FD blocks and another thread (another pyvm task)
+// wants to write to the same FD.  We don't care to optimize this and use a brute
+// force algorithm which allocates a brand new buffer and the previous buffer is
+// deleted when the former thread finished writting it to the floppy disk.
+//
+// 
+
+#define WBUFFER 8192
+
+static chunka.chunka ()
+{
+	pos = locked = dirty = 0;
+	buffer = (char*) __malloc (WBUFFER);
+}
+
+static inline bool chunka.softsp ()
+{
+	if_likely (pos) {
+		char c = buffer [pos - 1];
+		return c == ' ' || c == '\n';
+	}
+	return true;
+}
+
+static chunka.~chunka ()
+{
+	__free (buffer);
+}
+
+extern void *py_begin_allow_threads ();
+extern void py_end_allow_threads (void*);
+
+FDout.FDout (filedes *fd)
+{
+	FD = fd;
+	istty = isatty (FD->fd);
+	C = new chunka;
+}
+
+void FDout.softspace ()
+{
+	if (!C->softsp ())
+		writedt (" ", 1);
+}
+
+extern void RaiseIoError ();
+
+void os_write (chunka *D, filedes *FD, const void *p, int s)
+{
+	for (;;) {
+		int i = FD->write (p, s);
+		if (i == s) break;
+		if (i > 0) {
+			p += i;
+			s -= s;
+			continue;
+		}
+		if (i == 0)
+			sched_yield ();
+		if (i == -1)
+			if (FD->blocked) {
+				/* * * * BLOCKING * * * * * */
+				if (D)
+					D->locked = 1;
+				RELEASE_GIL
+				FD->wait_to_write ();
+				ACQUIRE_GIL
+				if (D) {
+					D->locked = 0;
+					if (D->dirty)
+					delete D;
+				}	
+			} else {
+				RaiseIoError ();
+			}
+	}
+}
+
+void FDout.writedt (const char *buff, int len)
+{
+#ifdef	DEBUNK
+	fwrite (buff, len, 1, STD);
+	fflush (STD);
+#else
+	if_unlikely (C->locked) {
+		C->dirty = 1;
+		C = new chunka;
+	}
+   more:;
+	chunka *D = C;
+	if_likely (!istty) buffit: {
+		int p = WBUFFER - D->pos;
+		if_likely (p >= len)
+			memcpy (D->buffer + postfix (D->pos, D->pos += len), buff, len);
+		else {
+			memcpy (D->buffer + D->pos, buff, p);
+			D->pos = 0;
+			os_write (D, FD, D->buffer, WBUFFER);
+			buff += p; len -= p;
+	/* optimize this with zero write */
+	//		if (len > WBUFFER)
+	//			fprintf (stderr, "To write more actually!\n");
+			goto more;
+		}
+		return;
+	}
+	for (int i = len - 1; i >= 0; i--)
+		if (buff [i] == '\n') {
+			if (D->pos)
+				os_write (D, FD, D->buffer, postfix (D->pos, D->pos = 0));
+			os_write (0, FD, buff, len);
+			return;
+		}
+	goto buffit;
+#endif
+}
+
+void FDout.flush ()
+{
+#ifdef	DEBUNK
+	fflush (STD);
+#else
+	if (C->pos)
+		os_write (C, FD, C->buffer, postfix (C->pos, C->pos = 0));
+#endif
+}
+
+FDout.~FDout ()
+{
+	flush ();
+	delete C;
+}
+
+//
+// higher level interface to print various types
+//
+
+extern int mytoa10 (char*, int);
+
+void FDout.print (Rdata x [...])
+{
+	/*** XXX: implement itoa, ftoa, ptoa ***/
+	char tmp [150];
+	for (int i = 0; i < xc; i++)
+		switch (xv [i].type) {
+			case    RSTR:	writedt (xv [i].s, strlen (xv [i].s));
+			ncase  RLONG:	writedt (tmp, mytoa10 (tmp, xv [i].i));
+			ncase  RCHAR:	writedt (&xv [i].c, 1);
+			ncase RFLOAT:	writedt (tmp, sprintf (tmp, "%f", xv [i].f));
+			ncase  RADDR:	writedt (tmp, sprintf (tmp, "%p", xv [i].p));
+			ncase  RBUFF:	writedt (xv [i].b.p, xv [i].b.s);
+			ncase   REXT:	probj (xv [i].p);
+		}
+}
+
+void FDout.pprint (Rdata x [...])
+{
+	/*** XXX: implement itoa, ftoa, ptoa ***/
+	char tmp [150];
+	for (int i = 0; i < xc; i++) {
+		switch (xv [i].type) {
+			case    RSTR:	writedt (xv [i].s, strlen (xv [i].s));
+			ncase  RLONG:	writedt (tmp, mytoa10 (tmp, xv [i].i));
+			ncase  RCHAR:	writedt (&xv [i].c, 1);
+			ncase RFLOAT:	writedt (tmp, sprintf (tmp, "%f", xv [i].f));
+			ncase  RADDR:	writedt (tmp, sprintf (tmp, "%p", xv [i].p));
+			ncase  RBUFF:	writedt (xv [i].b.p, xv [i].b.s);
+			ncase   REXT:	probj (xv [i].p);
+		}
+		softspace ();
+	}
+	/* an empty "" at the end signals no newline.  Thats for debugging */
+	if (!(xc && xv [xc-1].type == RSTR && !xv[xc-1].s[0]))
+		writedt ("\n", 1);
+}
+
+/******************************************************************************
+	read buffering -- input streams
+******************************************************************************/
+// two threads reading w/o sync on the same fd is even more absurd
+// and we return empty data to the second reader.
+//
+
+#define RBUFFER 8192
+
+FDin.FDin (filedes *fd)
+{
+	FD = fd;
+	pos = end = 0;
+	locked = 0;
+}
+
+static int FDin.os_read ()
+{
+	pos = 0;
+	for (;;) {
+		end = FD->read (buffer, RBUFFER);
+		if (end >= 0) return end;
+		if (end == -1) {
+			locked = 1;
+			RELEASE_GIL
+			FD->wait_to_read ();
+			ACQUIRE_GIL
+			locked = 0;
+		}
+	}
+}
+
+char *FDin.readn (int *pN)
+{
+	int N = *pN, n = 0, d;
+	char *ibuffer;
+
+	if_unlikely (locked) {
+		memcpy (ibuffer = seg_alloc (2), "\n", 2);
+		*pN = 0;
+		return ibuffer;
+	}
+
+	ibuffer = seg_alloc (1);
+	while (n < N) {
+		if (pos == end && !os_read ())
+			break;
+		d = end - pos;
+		if (d >= N - n) {
+			ibuffer = seg_xrealloc (ibuffer, N + 1);
+			memcpy (ibuffer + n, buffer + pos, N - n);
+			pos += N - n;
+			n = N;
+			break;
+		}
+		ibuffer = seg_xrealloc (ibuffer, n + d + 1);
+		memcpy (ibuffer + n, buffer + pos, d);
+		n += d;
+		pos = end;
+	}
+	ibuffer [n] = 0;
+	*pN = n;
+	return ibuffer;
+}
+
+static inline void *seg_xrealloc (void *p, int s)
+{
+	return p ? seg_realloc (p, s) : seg_alloc (s);
+}
+
+int FDin.readline (IOline L)
+{
+	char *nl;
+	int len;
+
+	if_unlikely (locked) {
+		memcpy (L.s = seg_alloc ((L.len = 1) + 1), "\n", 2);
+		return 1;
+	}
+
+	L.s = 0;
+	L.len = 0;
+	for (;;) {
+		if (pos == end && !os_read ())
+			break;
+		if ((nl = memchr (buffer + pos, '\n', end - pos))) {
+			L.s = seg_xrealloc (L.s, 1 + L.len + (len = nl - (buffer + (pos - 1))));
+			memcpy (L.s + postfix (L.len, L.len += len),
+				buffer + postfix (pos, pos += len), len);
+			break;
+		}
+		L.s = seg_xrealloc (L.s, 1 + L.len + end - pos);
+		memcpy (L.s + L.len, buffer + pos, end - pos);
+		L.len += end - pos;
+		pos = end;
+	}
+	if (L.s) {
+		L.s [L.len] = 0;
+		return 1;
+	}
+	return 0;
+}
+
+FDin.~FDin ()
+{
+}
+
+///////////////////////////////////// initialize /////////////////////////////////
+
+FDout *OUT, *ERR;
+FDin *IN;
+
+static class InitIO : InitObj {
+	int priority = INIT_PRINT;
+	void todo ()
+	{
+		OUT = new FDout (new filedes ($STDOUT_FILENO, $O_WRONLY));
+		ERR = new FDout (new filedes ($STDERR_FILENO, $O_WRONLY));
+		IN = new FDin (new filedes ($STDIN_FILENO, $O_RDONLY));
+	}
+};
+

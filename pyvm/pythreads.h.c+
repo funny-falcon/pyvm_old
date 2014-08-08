@@ -1,0 +1,128 @@
+/*
+ * py-threads.
+ * these are the "co-routines" also known as pyvm Tasks
+ *
+ * Each task has its vm context and if it is part of
+ * the R-list (RFirst, RLast, RCurrent), it will be
+ * executed sooner or later by the boot_pyvm scheduler.
+ *
+ * Allowing other threads to run because of blocking
+ * is basically a matter of the thread.c+ file which
+ * has real threads managed by the OS.  But it still
+ * has to pass through here to remove Tasks from the
+ * R-list.
+ */
+
+Task *RF, *RL, *RC, *RALL;
+
+void Task.move_running ()
+{
+	if (!RL) {
+		RC = RF = RL = this;
+		prev = next = 0;
+	} else {
+		next = 0;
+		prev = RL;
+		RL = RL->next = this;
+	}
+	state = TH_RUNNING;
+}
+
+Task *Task.move_blocked ()
+{
+	if (RC == this)
+		if ((RC = next ?: RF) == this) RC = 0;
+
+	if (next) next->prev = prev;
+	else RL = prev;
+	if (prev) prev->next = next;
+	else RF = next;
+	state = TH_SOFTBLOCK;
+	return this;
+}
+
+Task.Task (vm_context *v, int id)
+{
+	ID = id;
+	if (!RF) {
+		RF = RL = this;
+		prev = next = 0;
+	} else {
+		prev = 0;
+		next = RF;
+		RF = RF->prev = this;
+	}
+	state = TH_RUNNING;
+	preemptive = 0;
+	vm = v;
+
+	if ((_next = RALL))
+		_next->_prev = this;
+	RALL = this;
+	_prev = 0;
+	pctx = 0;
+}
+
+Task.~Task () noinline
+{
+	if (RC == this) {
+		if ((RC = next ?: RF) == this) RC = 0;
+	}
+	if (next) next->prev = prev;
+	else RL = prev;
+	if (prev) prev->next = next;
+	else RF = next;
+	if (_next) _next->_prev = _prev;
+	if (_prev) _prev->_next = _next;
+	else RALL = _next;
+}
+
+/*----------------------------------------------------------------------------*/
+
+static void Task.take_over ()
+{
+	/* The current context must have been saved for this to work.
+	 * this is called from end_allow_threads where the context is
+	 * saved from voluntarily context switch thanks to have_pending()
+	 * or the current thread is the self which never blocked.
+	 */
+	move_running ();
+	RC = this;
+	pvm = vm;
+	SET_CONTEXT
+}
+
+extern uint ThreadPID ();
+
+void *py_begin_allow_threads ()
+{
+	if (!multitasking)
+		return 0;
+	SAVE_CONTEXT
+	RC->vm = pvm;
+	Task *r = RC->move_blocked ();
+	/*++ must protect lwc-unwind stacktop ++*/
+	/*++ probably the ONLY thing that's not global and thus shared by all threads ++*/
+#ifndef CPPUNWIND
+	r->_dta = __lwcbuiltin_get_estack ();
+#endif
+
+	/* That's not really needed. Only for pyvm_extra.thread_status () */
+	r->PID = ThreadPID ();
+	r->state = TH_BLOCKED;
+	/* And other similar debugging. Maybe we'll need that for callback/GIL issue */
+
+	begin_allow_threads (RC != 0);			// ----> thread.c+
+	return r;
+}
+
+void py_end_allow_threads (void *v)
+{
+	if (!v) return;
+	Task *t = (Task*) v;
+	end_allow_threads ();			// ----> thread.c+
+#ifndef CPPUNWIND
+	__lwcbuiltin_set_estack (t->_dta);
+#endif
+	t->take_over ();
+}

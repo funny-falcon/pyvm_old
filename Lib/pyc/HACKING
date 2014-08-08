@@ -1,0 +1,141 @@
+Hacker's Guide to pyc
+=====================
+
+
+1) First of all there is the parser which is all in the file
+  parser.py. 
+  The parser takes source code and generates an AST tree.
+  The AST tree looks something like
+	Sub (Add (Name (x), Const(1)), Name (y))
+  For an source expression
+		"(x+1)-y"
+  Once the AST tree is generated the parser is not used any more.
+
+- The AST nodes are printable.
+
+- After we have the AST we do most of our work with 'walkers'
+  See visitor.py
+
+2) Next we have the symbol visitor.  This is implemented
+  in symbols.py and it's entered with parseSymbols().
+  The symbol visitor walks the entire tree to find out
+  the scopes and see what's the scope of each name.
+  This part is rather complicated because of python's
+  'nested scopes'.  Because
+	def foo(x):
+	    def bar():
+		return x
+   'x' is actually a closure and the symbol visitor studies
+   such things.
+
+- Once the symbol visitor is over it attaches an object 
+  called 'symtab' to each function.  We can query this
+  object with node.symtab.check_name ('x') to find out
+  what is 'x'. (global, local, closure)
+
+- The symbol visitor also does the simple type propagation,
+  and gathers info that can be used by the optimizer to use
+  LIST_APPEND.
+
+3) AST Optimizer:  Then we have the first AST optimizer at
+  optimizer.py which computes constant expressions and does
+  a couple of other things.  This is the FoldConstVisitor.
+  It will convert:
+	Add (Const (1), Const (2))
+  to:
+	Const (3)
+
+- At about the same time we insert the constants with
+  name_constifier which is another simple AST visitor.
+
+4) And now we have the pycodegen!
+
+	we have a big AST tree, we have symtab information
+	and we have optimized whatever can be optimized on
+	the AST tree.
+
+   pycodegen is a big AST visitor which walks the AST tree
+   and generates bytecode assembly.  You can't easilly hack
+   that one unless you have good knowledge of the virtual
+   machine.
+   Anyway, the important thing is that pycodegen generates
+   "Basic Blocks".  A basic block is a sequence of bytecodes
+   that has only one entry and one exit.
+
+- The basic block class is defined at pyassem.py
+
+- At this level we take advantage of python's dynamic typing.
+  For example a jump opcode is a tuple
+	('JUMP_ABSOLUTE', <Block object>)
+
+- Functions, classes, generator expressions and the module
+  are 'PyFlowGraph' objects.  A function's PyFlowGraph contains
+  all the basic blocks of a function.
+
+5) Once pycodegen has traversed an entire function we call
+  the 'getCode' function which eventually converts the PyFlowGraph
+  to a code object (a real python code object. We marshal that).
+
+  This happens in pyassem.py
+
+6) pyassem.  This is when we get from a PyFlowGraph to a code
+  object.
+
+	a) First we optimize the PyFlowGraph.  That's what's
+	nice about basic blocks: because they have one entry/exit
+	and all its opcodes will be executed, we can do bytecode
+	transformations.  This is optmizeGraph ().
+
+	b) After the graph's basic blocks are optimized we calculate
+	the stacksize of the PyFlowGraph
+
+	c) We flatten the graph.  That is we connect all the basic
+	blocks and make one big list with all the opcodes in order.
+	Theoretically there are two complex functions 'fixupOrder*'
+	but so far these are unused: the BBs are already in good
+	order. So don't waste any time trying to understand those.
+	During flattenGraph we also convert from:
+		('JUMP_ABSOLUTE', <Basic Block>)
+	to:
+		('JUMP_ABSOLUTE', index)
+
+	d) another jump target optimization with indexes.
+
+	e) convertArgs: Until now we have stuff like
+		('LOAD_CONST', 3.14)
+	this generates a tuple self.consts and converts to
+		('LOAD_CONST', index of 3.14 in self.consts)
+
+	f) makeByteCode. assemble to virtual machine code.
+	makes the co_code string and the lnotab string
+
+	g) After all these we return the parameters that
+	when passed to 'new.code' (see module 'new'), will
+	generate a code object.  This is final step is done
+	back at pycodegen which called getCode()
+
+7) That's it!
+  It's rather important to understand that for example
+  functions are converted to <code objects> and then we
+  continue with pycodegen which emits
+	('MAKE_FUNCTION', <code object>)
+  And the <code object> becomes part of the outer code
+  object's constants.
+  So it goes like this:
+	pycodegen.visitFunction()
+		make a new PyFlowGraph
+		continue with a new pycodegen to fill the
+		  PyFlowGraph with the basic blocks of
+		  the function
+		convert the PyFlowGraph to a code object
+		emit (MAKE_FUNCTION, code object)
+
+  (in this part python's 'compiler module' is different:
+    it keeps everything as
+	('MAKE_FUNCTION', <PyFlowGraph object>)
+    and converts all the pyflowgraphs to code object
+    at pyassem...)
+
+- In the end we marshal.dump the root code object which
+ will result in all the code objects dumped recursively.
+

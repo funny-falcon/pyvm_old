@@ -1,0 +1,130 @@
+#include "dynlib.h"
+#include "cStringIO.h"
+
+static DictObj cStringIOMethods __noinit ();
+static TypeObj cStringIOTypeObj;
+
+static final class cStringIOObj : __destructible__
+{
+	const char *const stype = cStringIOType;
+	const TypeObj &type = &cStringIOTypeObj;
+	DictObj *type_methods = &cStringIOMethods;
+
+	cStringIO IO;
+    public:
+	void print ();
+};
+
+static TypeObj cStringIOTypeObj ctor (cStringIOObj._v_p_t_r_);
+
+static cStringIO_chunk.cStringIO_chunk (cStringIO_chunk *c)
+{
+	c->next = this;
+	next = 0;
+}
+
+cStringIO.cStringIO ()
+{
+	used = 0;
+	avail = cSTRING_CHUNK;
+	last = &first;
+	first.next = 0;
+}
+
+void cStringIO.strcat (const char *s, int l)
+{
+	if (avail >= l) {
+		memcpy (last->data + used % cSTRING_CHUNK, s, l);
+		avail -= l;
+		used += l;
+	} else {
+		memcpy (last->data + used % cSTRING_CHUNK, s, avail);
+		used += avail;
+		last = new cStringIO_chunk (last);
+		s += avail;
+		l -= avail;
+		avail = cSTRING_CHUNK;
+		return strcat (s, l);
+	}
+}
+
+void cStringIO.write (StringObj *s)
+{
+	strcat (s->str, s->len);
+}
+
+StringObj *cStringIO.getvalue ()
+{
+	char *str = seg_alloc (used + 1);
+	char *p = str;
+
+	for (cStringIO_chunk *C = &first; C != last; C = C->next) {
+		memcpy (p, C->data, cSTRING_CHUNK);
+		p += cSTRING_CHUNK;
+	}
+	memcpy (p, last->data, used % cSTRING_CHUNK ?: cSTRING_CHUNK);
+	str [used] = 0;
+
+	return new StringObj allocated (str, used);
+}
+
+cStringIO.~cStringIO ()
+{
+	cStringIO_chunk *C = first.next;
+
+	while (C)
+		delete postfix (C, C = C->next);
+}
+
+/* Obj */
+
+static cStringIOObj.cStringIOObj ()
+{
+	__destructible__.ctor ();
+	IO.ctor ();
+}
+
+void cStringIOObj.print ()
+{
+	print_out ("<cStringIO instance ", IO.used, ">");
+}
+
+/* module */
+
+_module __object__ *write_cStringIO (REFPTR argv[])
+{
+	cStringIOObj.checkedcast (argv [0].o)->IO.write (argv [1].check_string ());
+	return &None;
+}
+
+_module __object__ *getvalue_cStringIO (REFPTR argv[])
+{
+	return cStringIOObj.checkedcast (argv [0].o)->IO.getvalue ();
+}
+
+static const method_attribute cStringIO_methods [] = {
+	{ "write",	"cStringIO.write", SETARGC (2, 2), write_cStringIO },
+	{ "getvalue",	"cStringIO.getvalue", SETARGC (1, 1), getvalue_cStringIO },
+	MSENTINEL
+};
+
+_module __object__ *StringIO_m (REFPTR argv[], int argc)
+{
+	if (!argc)
+		return new cStringIOObj;
+	StringObj *s = argv [0].check_string ();
+	cStringIOObj *c = new cStringIOObj;
+	c->IO.write (s);
+	return c;
+}
+
+static bltinfunc funcs [] = {
+	{ "StringIO",	SETARGC (0, 1), StringIO_m, 0 },
+	BSENTINEL
+};
+
+__object__ *import_cStringIO ()
+{
+	cStringIOMethods.ctor (cStringIO_methods);
+	return new ModuleObj BltinModule ("cStringIO", funcs);
+}

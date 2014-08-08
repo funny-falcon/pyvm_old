@@ -1,0 +1,19 @@
+#
+# covert glob patterns to regular expressions
+#
+
+import re;
+
+def compile (p, f=0)
+{
+	L = [];
+	for (i in p)
+		if (i in '\\[(') raise NotImplemented ("hack glob.pe");
+		else if (i in '.|+') L.append ('\\' + i);
+		else if (i in '*?') L.append ('.' + i);
+		else L.append (i);
+	if (L [-1] != '$')
+		L.append ('$');
+
+	return re.compile (''.join (L), f);
+}

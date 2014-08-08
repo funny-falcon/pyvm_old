@@ -1,0 +1,242 @@
+#include "dynlib.h"
+
+extern REFPTR devnull;
+
+/* start_new_thread */
+
+extern PyFuncObj *BootThread, *MultiTask;
+extern void *boot1;
+
+_module __object__ *start_new_thread (REFPTR argv [], int argc)
+{
+static	int taskID;
+	bool first = fork_thread ();
+
+	(*BootThread).call (devnull, argv - 1, 2);
+	CtxSw.setretval (&devnull);
+	CtxSw.vm->caller = boot1;
+	new Task (CtxSw.vm, ++taskID);
+
+	if_unlikely (first) {
+		if (RC->preemptive)
+			RaiseNotImplemented ("Not 100% safe to start a new thread in preemption");
+		vmTicks = -1;
+		REFPTR args = newIntObj (taskID);
+		(*MultiTask).call (devnull, &args - 1, 1);
+		return &CtxSw;
+	}
+
+	return newIntObj (taskID);
+}
+
+/* get_ident */
+
+_module __object__ *get_ident_thread ()
+{
+	return newIntObj (RC->ID);
+}
+
+/* lock object */
+
+static DictObj LockMethods __noinit ();
+
+static const char ThreadLockType [] = "Lock object";
+static TypeObj ThreadLockTypeObj;
+
+static class ThrLockObj : __container__
+{
+	const char *const stype = ThreadLockType;
+	const TypeObj &type = &ThreadLockTypeObj;
+	DictObj *type_methods = &LockMethods;
+
+	bool reentrant, unlocked;
+	int count, ownerID;
+	REFPTR waiters, blockers;
+   public:
+	ThrLockObj (bool = false);
+	bool acquire (int);
+
+trv	void traverse ()	{ waiters.traverse_ref (); blockers.traverse_ref (); }
+	void print ()		{ print_out (STRL ("<Lock object>")); }
+};
+
+static TypeObj ThreadLockTypeObj ctor (ThrLockObj._v_p_t_r_);
+
+ThrLockObj.ThrLockObj (bool b)
+{
+	reentrant = b;
+	count = 0;
+	ownerID = -1;
+	unlocked = true;
+	__container__.ctor ();
+	waiters.ctor (new ListObj);
+	blockers.ctor (new ListObj);
+}
+
+bool ThrLockObj.acquire (int rqID)
+{
+	/* 1: acquired ok
+	 * 0: must block
+	 */
+	if (!reentrant) {
+		if (!unlocked) return 0;
+		unlocked = false;
+		return 1;
+	}
+	if (unlocked) {
+		unlocked = false;
+		ownerID = rqID;
+		count = 1;
+		return 1;
+	}
+	if (ownerID != rqID)
+		return 0;
+	count++;
+	return 1;
+}
+
+void ThrLockObj.release ()
+{
+	if (!reentrant) {
+	do_release:
+		unlocked = true;
+		if (blockers.as_list->len) {
+			REFPTR y = blockers.as_list->pop (0);
+			((sem*)y.as_int->i)->post ();
+		} else if (waiters.as_list->len) {
+			REFPTR y = waiters.as_list->pop (0);
+			Task *W = (Task*) y.as_int->i;
+			W->move_running ();
+			acquire (W->ID);
+		}
+		return;
+	}
+	if (ownerID != RC->ID) {
+		fprintf (stderr, "Reentrant lock not released by owner\n");
+		CRASH
+	}
+	if (!--count)
+		goto do_release;
+}
+
+_module __object__ *release_ThrLockObj (REFPTR argv [])
+{
+	ThrLockObj *T = ThrLockObj.checkedcast (argv [0].o);
+	T->release ();
+	return &None;
+}
+
+_module __object__ *locked_ThrLockObj (REFPTR argv [])
+{
+	ThrLockObj *T = ThrLockObj.checkedcast (argv [0].o);
+	return T->unlocked ? &FalseObj : &TrueObj;
+}
+
+extern PyFuncObj *block_thread ();
+
+_module __object__ *acquire_ThrLockObj (REFPTR argv [], int argc)
+{
+	ThrLockObj *T = ThrLockObj.checkedcast (argv [0].o);
+	bool ac = T->acquire (RC->ID);
+	if (argc == 2 && !IntObj.checkedcast (argv [1].o)->i && !ac)
+		return &FalseObj;
+	if (ac)
+		return argc == 2 ? &TrueObj : &None;
+
+	/*** Must Block ***/
+
+	if (RC->preemptive) {
+		sem S;
+		T->blockers.as_list->append (new IntObj ((long) &S));
+		RELEASE_GIL
+		S.wait ();
+		ACQUIRE_GIL
+		return &None;
+	} else {
+		T->waiters.as_list->append (new IntObj ((long) RC));
+		block_thread ()->call (devnull, argv, 0);
+		return &CtxSw;
+	}
+}
+
+_module __object__ *allocate_lock_thread ()
+{
+	return new ThrLockObj;
+}
+
+//
+// This demonstrates the entire concept of stackless/non-stackless vm
+//
+
+#ifdef _POSIX_PRIORITY_SCHEDULING
+extern void sched_yield ();
+#else
+static void sched_yield ()
+{
+	usleep (1);
+}
+#endif
+
+void py_sched_yield ()
+{
+	RELEASE_GIL
+	sched_yield ();
+	ACQUIRE_GIL
+}
+
+_module __object__ *sched_yield_thread ()
+{
+	if_unlikely (RC->preemptive)
+		py_sched_yield ();
+	else	vmTicks = -1;
+	return &None;
+}
+
+//******************************************************************************
+//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// we make the reentrant Import Lock here and return two bound functions
+
+void make_IL_lock (REFPTR acf, REFPTR ref)
+{
+	REFPTR IL = new ThrLockObj (1);
+	acf.ctor (IL->getattr (Interns.acquire));
+	ref.ctor (IL->getattr (Interns.release));
+}
+
+//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+static const method_attribute lock_methods [] = {
+	{"locked",	"Lock.locked", SETARGC (1, 1), locked_ThrLockObj},
+	{"acquire",	"Lock.acquire", SETARGC (1, 2), acquire_ThrLockObj},
+	{"release",	"Lock.release", SETARGC (1, 1), release_ThrLockObj},
+	MSENTINEL
+};
+
+static const bltinfunc funcs [] = {
+	{ "start_new_thread",	SETARGC (2, 3), start_new_thread, 0 },
+	{ "allocate_lock",	SETARGC (0, 0), allocate_lock_thread, 0 },
+	{ "get_ident",		SETARGC (0, 0), get_ident_thread, 0 },
+	{ "sched_yield",	SETARGC (0, 0), sched_yield_thread, 0 },
+	{ "_local",		SETARGC (0, 0), 0, 0 },
+	BSENTINEL
+};
+
+static class InitLock : InitObj {
+	int priority = INIT_ATTR;
+	void todo ()
+	{
+		LockMethods.ctor (lock_methods);
+	}
+};
+
+slowcold __object__ *import_thread ()
+{
+	ModuleObj *tr;
+	tr = new ModuleObj ictor (
+		("error", new DynClassObj (new DictObj, new Tuplen (DynExceptions.Exception),
+			"error")));
+	tr->GC_ROOT ();
+	tr->AddFuncs (funcs);
+	return tr;
+}

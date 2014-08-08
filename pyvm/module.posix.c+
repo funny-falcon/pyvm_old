@@ -1,0 +1,193 @@
+extern "dirent.h" {
+#include <dirent.h>
+}
+#include "dynlib.h"
+
+_module __object__ *access_posix (REFPTR argv[])
+{
+	return access (StringObj.checkedcast (argv [0].o)->str,
+		 IntObj.fcheckedcast (argv [1].o)->i) == 0 ? IntObj_1 : IntObj_0;
+}
+
+_module __object__ *getcwd_posix ()
+{
+	char buf [2047];
+	if (!getcwd (buf, sizeof buf))
+		RaiseOsError ();
+	return new StringObj (buf);
+}
+
+_module __object__ *rename_posix (REFPTR argv[])
+{
+	if (rename (argv [0].check_string ()->str, argv [1].check_string ()->str))
+		RaiseOsError ();
+	return &None;
+}
+
+_module __object__ *unlink_posix (REFPTR argv[])
+{
+	unlink (argv [0].check_string ()->str);
+	return &None;
+}
+
+_module __object__ *_exit_posix (REFPTR argv[])
+{
+	exit (IntObj.checkedcast (argv [0].o)->i);
+}
+
+_module __object__ *system_posix (REFPTR argv[])
+{
+	char *s = argv [0].check_string ()->str;
+	RELEASE_GIL
+	int rz = system (s);
+	ACQUIRE_GIL
+	return newIntObj (rz);
+}
+
+_module __object__ *chdir_posix (REFPTR argv[])
+{
+	if (chdir (argv [0].check_string ()->str) == -1)
+		RaiseOsError ();
+	return &None;
+}
+
+_module __object__ *putenv_posix (REFPTR argv[])
+{
+	StringObj *s1 = StringObj.checkedcast (argv [0].o);
+	StringObj *s2 = StringObj.checkedcast (argv [0].o);
+	char *s = __malloc (s1->len + s2->len + 1);
+	strcat (strcat (strcpy (s, s1->str), "="), s2->str);
+	putenv (s);
+	return &None;
+}
+
+_module __object__ *urandom_posix (REFPTR argv[])
+{
+	int fd = open ("/dev/urandom", O_RDONLY);
+	if (fd != -1) {
+		int n;
+		char inb [n = IntObj.checkedcast (argv [0].o)->i];
+
+		read (fd, inb, n);
+		close (fd);
+		return new StringObj binctor (inb, n);
+	}
+	RaiseNotImplemented ("dev/urandom");
+}
+
+Interrupt OSError (OS_ERROR);
+
+static __object__ *RaiseOsError ()
+{
+	OSError.obj = new StringObj (strerror (errno));
+	throw &OSError;
+}
+
+#ifndef _D_EXACT_NAMLEN
+#define _D_EXACT_NAMLEN(d) strlen ((d)->d_name)
+#endif
+
+_module __object__ *listdir_posix (REFPTR argv [])
+{
+	char *path = StringObj.checkedcast (argv [0].o)->str;
+	DIR *D;
+	dirent *d;
+
+	if (!(D = opendir (path)))
+		RaiseOsError ();
+
+	ListObj *L = new ListObj;
+	while ((d = readdir (D))) {
+		int namlen = _D_EXACT_NAMLEN (d);
+		if (d->d_name [0] == '.' && (namlen == 1
+		|| (namlen == 2 && d->d_name [1] == '.')))
+			continue;
+		L->append (new StringObj binctor (d->d_name, namlen));
+	}
+	closedir (D);
+	return L;
+}
+
+_module __object__ *_stat_posix (REFPTR argv[])
+{
+	return statfunc (StringObj.checkedcast (argv [0].o)->str, stat);
+}
+
+_module __object__ *_lstat_posix (REFPTR argv[])
+{
+	return statfunc (StringObj.checkedcast (argv [0].o)->str, lstat);
+}
+
+static __object__ *statfunc (const char *path, int (*f)(const char*, struct stat*))
+{
+	/* the real 'stat' is a class which implements structseq */
+	struct stat statbuf;
+
+	if (f (path, &statbuf) == -1)
+		RaiseOsError ();
+
+	return new Tuplen (newIntObj (statbuf.st_mode), newIntObj (statbuf.st_ino),
+		 newIntObj (statbuf.st_dev), newIntObj (statbuf.st_nlink),
+		 newIntObj (statbuf.st_uid), newIntObj (statbuf.st_gid),
+		 newIntObj (statbuf.st_size), newIntObj (statbuf.st_atime),
+		 newIntObj (statbuf.st_mtime), newIntObj (statbuf.st_ctime),
+		 newIntObj (statbuf.st_blksize), newIntObj (statbuf.st_blocks),
+		 newIntObj (statbuf.st_rdev));
+}
+
+_module __object__ *OPEN_posix (REFPTR argv[])
+{
+	int fd = open (argv [0].check_string ()->str, argv [1].check_int ()->i, argv [2].check_int ()->i);
+	if (fd == -1)
+		RaiseOsError ();
+	return newIntObj (fd);
+}
+
+extern char **environ;
+
+/* module */
+
+static const bltinfunc funcs [] = {
+	{ "access",	SETARGC (2, 2), access_posix, 0 },
+	{ "open",	SETARGC (3, 3), OPEN_posix, 0 },
+	{ "unlink",	SETARGC (1, 1), unlink_posix, 0 },
+	{ "_exit",	SETARGC (1, 1), _exit_posix, 0 },
+	{ "putenv",	SETARGC (2, 2), putenv_posix, 0 },
+	{ "urandom",	SETARGC (1, 1), urandom_posix, 0 },
+	{ "listdir",	SETARGC (1, 1), listdir_posix, 0 },
+	{ "system",	SETARGC (1, 1), system_posix, 0 },
+	{ "_stat",	SETARGC (1, 1), _stat_posix, 0 },
+	{ "_lstat",	SETARGC (1, 1), _lstat_posix, 0 },
+	{ "chdir",	SETARGC (1, 1), chdir_posix, 0 },
+	{ "rename",	SETARGC (2, 2), rename_posix, 0 },
+	{ "getcwd",	0, getcwd_posix, 0 },
+	BSENTINEL
+};
+
+static const char *aliases [] = { "remove", "unlink", 0 };
+
+slowcold __object__ *import__posix ()
+{
+	ModuleObj *posix = new ModuleObj BltinModule ("posix", funcs, aliases);
+	DictObj *env = new DictObj;
+	int i, j;
+	for (i = 0; environ [i]; i++) {
+		for (j = 0; environ [i][j] != '='; j++);
+		env->xsetitem (new StringObj binctor (environ [i], j),
+				new StringObj (environ [i] + j + 1));
+	}
+
+	posix->AddAttributes (
+		('environ', env),
+		('error', DynExceptions.OSError),
+		('R_OK', newIntObj ($R_OK)),
+		('W_OK', newIntObj ($W_OK)),
+		('X_OK', newIntObj ($X_OK)),
+		('F_OK', newIntObj ($F_OK)),
+		('O_RDONLY', newIntObj ($O_RDONLY)),
+		('O_RDWR', newIntObj ($O_RDWR)),
+		('O_CREAT', newIntObj ($O_CREAT)),
+		('O_EXCL', newIntObj ($O_EXCL)),
+		('O_WRONLY', newIntObj ($O_WRONLY)));
+	return posix;
+}

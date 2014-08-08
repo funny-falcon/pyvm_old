@@ -1,0 +1,24 @@
+regular expressions to C
+------------------------
+
+The functionality of this module is very limited.
+Although only ~40% of the features of regular expressions
+are supported, (no anchors, backreferences, repetition on repetition)
+it is still good since jitting regexps would be done
+on selected cases, and these cases can be written in such
+a way that can be jitted.
+
+Regular expressions are algorithms and writting regexps
+is programming and therefore arranging to JIT them is part
+of the deal (as well as hacking rejit and looking at the
+generated C code, and the assembler output).
+
+Usually, it doesn't make sense to JIT small regular expressions.
+For
+	R = re.compile ('\w+\d')
+it's better to leave it to pcre; re2c won't be any faster and
+you'll fill memory with shared libaries.
+re2c can give a 20%-30% speedup for more complex regexes.
+
+For really big regular expressions like a C tokenizer, re2c
+can reach a 40%-50% speedup.

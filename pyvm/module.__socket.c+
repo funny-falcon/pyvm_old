@@ -1,0 +1,349 @@
+extern "sys/types.h" {
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/select.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <math.h>
+}
+extern "sys/socket.h" { }
+extern "sys/select.h" { }
+extern "netinet/in.h" { }
+extern "arpa/inet.h" { }
+extern "math.h" { }
+
+/*
+ * BEGINNING Linux Programming, by WROX PRESS
+ * is a great book for such stuff.
+ */
+
+#include "dynlib.h"
+#include "vmpoll.h"
+#include "funcwrapper.h"
+
+static int double_to_ms (double t)
+{
+	if (t < 0)
+		return -1;
+	return floor (t * 1000);
+}
+
+//
+// do something completely different: provide pointers to functions
+// and use DLL.fptr_wrapper to make py functions. Better for the
+// size of the binary and pretty good when speed is not so critical
+//
+
+extern void set_nonblocking (int);
+
+static int sock_creat (int d, int t, int p)
+{
+	int fd = socket (d, t, p);
+	if (fd != -1)
+		set_nonblocking (fd);
+	return fd;
+}
+
+static void getsockname_af_inet (int sock, int params[])
+{
+	struct sockaddr_in s;
+	uint len = sizeof s;
+	getsockname (sock, (struct sockaddr*) &s, &len);
+	params [0] = s.sin_addr.s_addr;
+	params [1] = ntohs (s.sin_port);
+}
+
+static int bind_af_inet (int sock, int addr, int port)
+{
+	struct sockaddr_in s;
+	s.sin_family = AF_INET;
+	s.sin_addr.s_addr = addr;
+	s.sin_port = htons (port);
+	return bind (sock, (struct sockaddr*) &s, sizeof s);
+}
+
+/***************************************************************
+ * connect.  using the poller because connect is one of those
+ * things that may possibly block.
+ **************************************************************/
+
+static class connectNotify : NotifyObj
+{
+	struct sockaddr_in s;
+	int sock;
+    public:
+	connectNotify (int, sockaddr_in);
+	void do_notify (int);
+};
+
+connectNotify.connectNotify (int _sock, sockaddr_in ss)
+{
+	NotifyObj.ctor ();
+	sock = _sock;
+	s = ss;
+}
+
+void connectNotify.do_notify (int)
+{
+	set_retval (newIntObj (connect (sock, (struct sockaddr*) &s, sizeof s)));
+	NotifyObj.do_notify (0);
+}
+
+_module __object__ *connect_af_inet (REFPTR argv[])
+{
+	int sock = argv [0].check_int ()->i;
+	int addr = argv [1].check_int ()->i;
+	int port = argv [2].check_int ()->i;
+	struct sockaddr_in s;
+	s.sin_family = AF_INET;
+	s.sin_addr.s_addr = addr;
+	s.sin_port = htons (port);
+
+	int r = connect (sock, (struct sockaddr*) &s, sizeof s);
+	if (r == -1 && errno == EINPROGRESS) {
+
+		if (CAN_VMPOLL)
+			return vmpollout (new connectNotify (sock, s), sock, -1);
+
+		wait_for_socket (sock, 1);
+		r = connect (sock, (struct sockaddr*) &s, sizeof s);
+	}
+
+	return newIntObj (r);
+}
+
+/***************************************************************
+ **************************************************************/
+
+static int listen_gil (int sock, int n)
+{
+	/* or is this instant? */
+	RELEASE_GIL
+	int r = listen (sock, n);
+	ACQUIRE_GIL
+	return r;
+}
+
+static void wait_for_socket (int sock, int writting)
+{
+	fd_set fds;
+	FD_ZERO (&fds);
+	FD_SET (sock, &fds);
+	RELEASE_GIL
+	if (writting)
+		select (sock+1, 0, &fds, 0, 0);
+	else
+		select (sock+1, &fds, 0, 0, 0);
+	ACQUIRE_GIL
+}
+
+/***************************************************************
+ * accept.  
+ * using the poller for the case of multithreaded socket server
+ **************************************************************/
+
+static class acceptNotify : NotifyObj
+{
+	int sock;
+    public:
+	acceptNotify (int);
+	void do_notify (int);
+};
+
+acceptNotify.acceptNotify (int s)
+{
+	NotifyObj.ctor ();
+	sock = s;
+}
+
+void acceptNotify.do_notify (int)
+{
+	struct sockaddr_in s;
+	unsigned int client_len = sizeof s;
+	int r = accept (sock, (struct sockaddr*) &s, &client_len);
+
+	if (r != -1)
+		set_nonblocking (r);
+	set_retval (new Tuplen (newIntObj (r), newIntObj (s.sin_addr.s_addr),
+				newIntObj (s.sin_port)));
+
+	NotifyObj.do_notify (0);
+}
+
+_module __object__ *accept_socket (REFPTR argv[])
+{
+	struct sockaddr_in s;
+	unsigned int client_len = sizeof s;
+	int sock = argv [0].check_int ()->i;
+	int r = accept (sock, (struct sockaddr*) &s, &client_len);
+
+	if (r == -1 && errno == EAGAIN) {
+
+		if (CAN_VMPOLL)
+			return vmpollin (new acceptNotify (sock), sock, -1);
+
+		wait_for_socket (sock, 0);
+		r = accept (sock, (struct sockaddr*) &s, &client_len);
+	}
+	if (r != -1)
+		set_nonblocking (r);
+
+	return new Tuplen (newIntObj (r), newIntObj (s.sin_addr.s_addr), newIntObj (s.sin_port));
+}
+
+/***************************************************************
+ **************************************************************/
+
+static int sendall (int sock, char *data, int len, int flags)
+{
+	int ret = 1;
+
+	RELEASE_GIL
+	do {
+		int n = send (sock, data, len, flags);
+		if (n < 0) {
+			ret = 0;
+			break;
+		}
+		data += n;
+		len -= n;
+	} while (len > 0);
+	ACQUIRE_GIL
+
+	return ret;
+}
+
+static void setsockopt_w (int sock, int level, int opn, int val)
+{
+	setsockopt (sock, level, opn, &val, sizeof val);
+}
+
+/***************************************************************
+ * recv
+ *  recv can use the poller to wait stacklessly
+ **************************************************************/
+
+static class recvNotify : NotifyObj
+{
+	char *buffer;
+	int sock, n, flags;
+   public:
+	recvNotify (int, int, int, char*);
+	void do_notify (int);
+};
+
+recvNotify.recvNotify (int i1, int i2, int i3, char *s)
+{
+	NotifyObj.ctor ();
+	sock = i1;
+	n = i2;
+	flags = i3;
+	buffer = s;
+}
+
+void recvNotify.do_notify (int timedout)
+{
+	if (timedout)
+		set_retval (newIntObj (-2));
+	else {
+		int i = recv (sock, buffer, n, flags);
+		if (i == -1)
+			set_retval (newIntObj (-1));
+		else	set_retval (new StringObj binctor (buffer, i));
+	}
+	seg_free (buffer);
+	NotifyObj.do_notify (0);
+}
+
+static __object__ *recv2 (REFPTR argv[])
+{
+	/* XXX: check buffer size for -1 */
+	int sock = argv [0].check_int ()->i;
+	int n = argv [1].check_int ()->i;
+	int flags = argv [2].check_int ()->i;
+	char *buffer = seg_alloc (n);
+	int i = recv (sock, buffer, n, flags);
+	double timeout = -1;
+
+	if (IntObj.isinstance (argv [3].o)) timeout = argv [3].as_int->i;
+	else if (FloatObj.isinstance (argv [3].o)) timeout = argv [3].as_double->f;
+
+	if (i == -1 && errno == EAGAIN) {
+
+		if (CAN_VMPOLL)
+			return vmpollin (new recvNotify (sock, n, flags, buffer),
+					 sock, double_to_ms (timeout));
+
+		wait_for_socket (sock, 0);
+		i = recv (sock, buffer, n, flags);
+	}
+
+	if (i == -1)
+		return newIntObj (-1);
+	__object__ *S = new StringObj binctor (buffer, i);
+	seg_free (buffer);
+	return S;
+}
+
+/***************************************************************
+ **************************************************************/
+
+static __object__ *gethostname_w ()
+{
+	char tmp [256];
+	gethostname (tmp, sizeof tmp);
+	return new StringObj (tmp);
+}
+
+static void close_shutdown (int sock)
+{
+	close (sock);
+}
+
+slowcold __object__ *import__socket ()
+{
+	ModuleObj *ns;
+
+	__object__ *F = new FuncWrapperObj_fargc (4, recv2, "recv");
+	__object__ *F2 = new FuncWrapperObj_fargc (0, gethostname_w, "gethostname");
+	__object__ *AC = new FuncWrapperObj_fargc (1, accept_socket, "accept");
+	__object__ *CO = new FuncWrapperObj_fargc (3, connect_af_inet, "connect");
+	ns = new ModuleObj ictor (
+		("AF_UNIX", $AF_UNIX),
+		("AF_INET", $AF_INET),
+#ifdef	AF_INET6
+		("AF_INET6", $AF_INET6),
+#endif
+#ifdef	PF_PACKET
+		("PF_PACKET", $PF_PACKET),
+#endif
+		("SOCK_STREAM", $SOCK_STREAM),
+		("SOCK_DGRAM", $SOCK_DGRAM),
+		("SOCK_RAW", $SOCK_RAW),
+#ifdef	SOCK_PACKET
+		("SOCK_PACKET", $SOCK_PACKET),
+#endif
+		("SOL_SOCKET", $SOL_SOCKET),
+		("SO_REUSEADDR", $SO_REUSEADDR),
+		("socket", (int) sock_creat),
+		("inet_addr", (int) inet_addr),
+		("bind_af_inet", (int) bind_af_inet),
+
+		("connect_af_inet", CO),
+
+		("getsockname_af_inet", (int) getsockname_af_inet),
+
+		("accept_af_inet", AC),
+
+		("listen", (int) listen_gil),
+		("send", (int) send),
+		("close", (int) close_shutdown),
+		("setsockopt", (int) setsockopt_w),
+		("inet_ntoa", (int) inet_ntoa),
+		("sendall", (int) sendall),
+		("gethostname", F2),
+		("recv", F)
+	);
+	ns->GC_ROOT ();
+	return ns;
+}

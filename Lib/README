@@ -1,0 +1,13 @@
+First of all, pyvm does not use this directory to import modules.
+It uses ../Public which has links to the .pyc files of this tree.
+
+So if you modify anything you have to type, 'make' before it
+works as a standard library module.
+
+
+BOOTSTRAPPING:
+
+In order to bootstrap we store the critical .pycs in image.tar
+and unpack this and recompile. Right now the pyc compiler also
+uses 're', 'itertools', 'posix' and 'os' so we need the pycs of
+these in order to boot.

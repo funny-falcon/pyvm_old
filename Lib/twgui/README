@@ -1,0 +1,118 @@
+Twilight GUI v0.6 - pre ALPHA
+=============================
+
+Twilight GUI is a python GUI wrapper that currently works on top of PyGTK
+(GTK), PyQT (Qt), wxPython (GTK on linux, win32 on Windows) and Tkinter.
+
+An application using TG will run on any system which supports at least one of
+those four toolkits.
+
+In the end, with Twilight GUI the *user* selects the preferred toolkit and
+not the programmer.
+
+Twilight GUI was made on:
+
+	PyGTK 2.2.0
+	PyQT x11-gpl-3.12
+	wxPython 2.5.2.8
+	Tkinter 8.4
+	Python 2.4a
+
+Anything older than these versions may malfunction.
+
+Some widgets may appear ugly on each toolkit under cerain situations.
+That's because I'm not an expert in none of those toolkits. pygtk, pyqt and
+wxpython gurus can really help here.
+
+
+
+Interface
+=========
+
+Twilight GUI presents a very simple and higher-level widget library.
+
+Because the underlying libraries are powerful complex widget sets, TG is rather
+restricted to simple common features: you can't do everything.
+Usually, toolkit designers have a couple of sample programs in mind and
+they would like their toolkit to be able to implement them.  Those are
+namely MS Word, Windows explorer and Netscape Navigator.
+
+If you'd like to write an application like the above that will be used by
+millions of newbie users who will feel comfortable with the ``other thing'',
+Twilight GUI is *not* the tool.  Invest your time learning a widget set with
+10,000 functions that can *really* emulate everything a widget designer
+might think of.
+
+If, on the other hand, you just want to write a quick popup interface for a
+small portable python application, Twilight GUI is the answer.
+
+There is a big list of ToDo widgets for Twilight GUI so the fact for example
+that combobox is currently not implemented shouldn't discourage you.
+Another example is to translate keypress abbreviations for widgets to a
+common standard.  Richtext box will definitelly be harder to implement.
+Implementing an html viewer may be the first approach.
+Many things need cleanup and little fixes for the various toolkits.
+
+The good news is that Twilight GUI is so small that we don't have to wait
+for it to become a stanard python module.  We can distribute the three
+wrap_* files along with our application.
+
+
+A First Taste
+=============
+
+In order to use TG we have to import one of: wrap_pygtk, wrap_pyqt,
+wrap_wxpython or wrap_tkinter.  It's possible to import more than
+one and switch GUIs at runtime.  Usually importing these in a portable
+application would be something like:
+
+	GUI=None
+	try: # try to import PyQt first
+	 import wrap_pyqt
+	 GUI = wrap_pyqt
+	except ImportError:
+	 try: # if it doesn't exist, go for PyGTK
+	  import wrap_pygtk
+	  GUI = wrap_pygtk
+	 except ImportError:
+	  try: # finally go for wxPython
+	   import wrap_wxpython
+	   GUI = wrap_wxpython
+	  except ImportError:
+	   try:
+	    import wrap_tkinter
+	    GUI = wrap_tkinter
+	   except ImportError
+	    print "No toolkit!!"
+
+And the hello world example:
+
+	W = GUI.Window ()
+	W.start_construction ()
+	W.button (text='Click me', cmd='print "Hello world!"')
+	W.end_construction ()
+	GUI.exec_loop ()
+
+
+Documentation
+=============
+
+twdoc.html has the widget reference.
+In examples/ there is the editor IDE which can run code in all toolkits.
+However, it doesn't always work. We can safely call wx gui from pygtk and
+pygtk from wx.  We can call one qt window from wx or gtk but then the wx/gtk
+window becomes inactive.  If we call a wx/gtk window from qt, it freezes.
+
+
+Project info
+============
+
+Twilight GUI is Freeware.
+Using the wrappers on the other hand means that your work may
+be 'derrived work' of the wrapped toolkit. See COPYING for that.
+
+Homepage: http://students.ceid.upatras.gr/~sxanth/twgui/
+Developer's list: http://lists.hellug.gr/mailman/listinfo/twg-devel
+
+Twilight GUI has been developed by
+	Stelios Xanthakis, Tom Parker

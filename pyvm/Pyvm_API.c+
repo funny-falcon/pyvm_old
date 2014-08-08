@@ -1,0 +1,76 @@
+#include "dynlib.h"
+#include "pyvm_API.h"
+
+/*******************************************************************************
+
+	CPython uses its API internally and in a way it's implemented
+	as an extension of its own API!
+
+	In pyvm we won't do that. We'll have a simple, C-friendly, stable
+	API for embedding pyvm. Our internal API (dynlib.h) will not be
+	available to other applications.
+
+	One reason for this is that dynlib is written in lwc and
+	we can't force everybody who wants to use libpyvm to use lwc.
+	Also, the api of dynlib is completely non-standard and keeping
+	it frozen will harm the development of pyvm.
+
+	But this is also good. The best thing about an API is its
+	backward/forward compatibility and this way we ensure maximum
+	compatibility for all future apps. Moreover the API is
+	completely abstracted from the python language; it's an API
+	for a virtual machine with reference counted objects and the
+	ability to extend itself through a virtual DLL provided
+	by the embedding program.
+
+	The user must take care of locking.
+
+*******************************************************************************/
+
+int Pyvm_Init ()
+{
+	return PYVM_OK;
+}
+
+void Pyvm_IncrRefCount (PyvmObj *o)
+{
+	((__object__*) o)->incref ();
+}
+
+void Pyvm_DecrRefCount (PyvmObj *o)
+{
+	((__object__*) o)->decref ();
+}
+
+int Pyvm_ToInt (PyvmObj *p)
+{
+	__object__ *o = (__object__*)p;
+	return IntObj.cast (o)->i;
+}
+
+double Pyvm_ToDouble (PyvmObj *p)
+{
+	__object__ *o = (__object__*)p;
+	return FloatObj.cast (o)->f;
+}
+
+char *Pyvm_ToString (PyvmObj *p)
+{
+	__object__ *o = (__object__*)p;
+	return StringObj.cast (o)->str;
+}
+
+void *Pyvm_FromInt (int i)
+{
+	return newIntObj (i);
+}
+
+void *Pyvm_FromDouble (double d)
+{
+	return new FloatObj (d);
+}
+
+void *Pyvm_FromString (const char *s)
+{
+	return new StringObj (s);
+}

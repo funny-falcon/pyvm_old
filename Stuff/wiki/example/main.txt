@@ -1,0 +1,14 @@
+wiki
+====
+
+Simple wiki based on the [web.py](http://webpy.org) framework and running on pyvm.
+
+Topics:
+
+*  [About the wiki](/about.html)
+*  [FAQ](/FAQ.html)
+*  [the wall](/wall.html)
+*  [To Do](/todo.html)
+
+To the [static page](file://<path_to_cwd>/to_the_wiki.html)!
+(don't bookmark the wiki!).

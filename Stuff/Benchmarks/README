@@ -1,0 +1,51 @@
+
+This is the pyvmbench benchmark/testing framework.
+
+It can be used to compare different python implementations,
+different versions of python and different compilers/compilation
+options for the same python implementation.
+
+All the testcases were collected from the internet and are already
+available on-line. See each individual testcase for authorship.
+
+
+USAGE
+-----
+
+The main file is 'Dejavu.py'.
+It runs all the testcases with PROG1 which by default is 'python' and then
+with PROG2 which by default is 'pyvm' and calculates the difference.
+
+The number of loop iterations where tuned for a 1.6GHz Pentium-M, so that python 2.4
+takes about 2 seconds to run a test.
+
+The usage is:
+
+	Dejavu.py [options] [files]
+
+Where the options are:
+
+	-nr=2		: number of times to run each test for each PROG
+	-check		: run checks only.  Runs the programs and compares output.
+	-random		: do not run checks for tests whos output depends on the
+			  same random number generator.
+	-descr		: print the description of each file after the summary of results
+	-nocompile	: do not precompile and benchmark the pycs / each implementation
+			  compiles the source. We measure the time of the compiler too.
+
+If files are not specified all testcases will be tested.
+
+Some tests expect '/usr/share/dict/words' to exist as a datafile.
+
+There is no command line option to specify alternative PROG1/PROG2!
+You'll need to edit Dejavu.py
+
+
+COPYING
+-------
+
+Most of the code in this package is not mine.
+The testcases should be considered as in a 'being on-line' state.
+If you wish to distribute them, contact their authors.
+AFAIC, nccstrip.py, Dejavu.py, anagrams.py, sudoku.py jspy.py, and the datafiles are
+ in the public domain.

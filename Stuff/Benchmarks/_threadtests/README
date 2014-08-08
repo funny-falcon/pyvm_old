@@ -1,0 +1,9 @@
+
+Threading is complicated and interesting.
+
+
+Here are some tests to test threading.  Not very useful as
+benchmarks but we can have pyvm report number of process switches
+and other similar stats.
+
+

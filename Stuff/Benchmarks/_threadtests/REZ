@@ -1,0 +1,1436 @@
+START_THREAD 0
+Starting new thread with ID 1
+BLK: use CTL
+manager awakened 2 1
+BLK: use CTL
+manager awakened 2 1
+START_THREAD 1
+BLK: use GIL
+BLK: use GIL
+START_THREAD 2
+BLK: use CTL
+manager awakened 2 3
+Starting new thread with ID 2
+BLK: use GIL
+BLK: use GIL
+START_THREAD 3
+BLK: use CTL
+manager awakened 3 4
+Starting new thread with ID 3
+BLK: use GIL
+BLK: use GIL
+START_THREAD 4
+BLK: use CTL
+manager awakened 4 5
+Starting new thread with ID 4
+BLK: use GIL
+BLK: use GIL
+START_THREAD 5
+BLK: use CTL
+manager awakened 5 6
+Starting new thread with ID 5
+BLK: use GIL
+BLK: use GIL
+START_THREAD 6
+BLK: use CTL
+manager awakened 6 7
+Starting new thread with ID 6
+BLK: use GIL
+BLK: use GIL
+START_THREAD 7
+BLK: use CTL
+manager awakened 7 8
+Starting new thread with ID 7
+BLK: use GIL
+BLK: use GIL
+START_THREAD 8
+BLK: use CTL
+manager awakened 8 9
+Starting new thread with ID 8
+BLK: use GIL
+BLK: use GIL
+START_THREAD 9
+BLK: use CTL
+manager awakened 9 10
+Starting new thread with ID 9
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use GIL
+START_THREAD 10
+BLK: use GIL
+BLK: use GIL
+START_THREAD 11
+BLK: use GIL
+BLK: use GIL
+START_THREAD 12
+BLK: use GIL
+BLK: use GIL
+START_THREAD 13
+BLK: use GIL
+BLK: use GIL
+START_THREAD 14
+BLK: use GIL
+BLK: use GIL
+START_THREAD 15
+BLK: use GIL
+BLK: use GIL
+START_THREAD 16
+BLK: use GIL
+BLK: use GIL
+START_THREAD 17
+BLK: use GIL
+BLK: use GIL
+START_THREAD 18
+BLK: use GIL
+BLK: use GIL
+START_THREAD 19
+BLK: use GIL
+BLK: use GIL
+START_THREAD 20
+BLK: use GIL
+BLK: use GIL
+START_THREAD 21
+BLK: use GIL
+BLK: use GIL
+START_THREAD 22
+BLK: use WIL
+BLK: use GIL
+START_THREAD 23
+BLK: use GIL
+BLK: use GIL
+START_THREAD 24
+BLK: use GIL
+BLK: use GIL
+START_THREAD 25
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use WIL
+BLK: use GIL
+BLK: use WIL
+BLK: use GIL
+BLK: use CTL
+manager awakened 10 26
+Starting new thread with ID 10
+BLK: use WIL
+BLK: use CTL
+manager awakened 11 26
+Starting new thread with ID 11
+BLK: use CTL
+manager awakened 12 26
+Starting new thread with ID 12
+BLK: use CTL
+manager awakened 13 26
+Starting new thread with ID 13
+BLK: use CTL
+manager awakened 13 26
+Starting new thread with ID 14
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use GIL
+BLK: use GIL
+BLK: use CTL
+manager awakened 15 26
+Starting new thread with ID 15
+BLK: use CTL
+manager awakened 16 26
+Starting new thread with ID 16
+BLK: use CTL
+manager awakened 17 26
+Starting new thread with ID 17
+BLK: use CTL
+manager awakened 18 26
+Starting new thread with ID 18
+BLK: use CTL
+manager awakened 19 26
+Starting new thread with ID 19
+BLK: use CTL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use CTL
+manager awakened 20 26
+Starting new thread with ID 20
+BLK: use CTL
+manager awakened 21 26
+Starting new thread with ID 21
+BLK: use CTL
+manager awakened 22 26
+Starting new thread with ID 22
+BLK: use CTL
+manager awakened 23 26
+Starting new thread with ID 23
+BLK: use CTL
+manager awakened 23 26
+Starting new thread with ID 24
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use GIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use GIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use GIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use CTL
+manager awakened 25 26
+Starting new thread with ID 25
+BLK: use CTL
+manager awakened 25 26
+Starting new thread with ID 26
+BLK: use CTL
+manager awakened 25 26
+Starting new thread with ID 27
+BLK: use CTL
+manager awakened 25 26
+Starting new thread with ID 28
+BLK: use CTL
+manager awakened 25 26
+Starting new thread with ID 29
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use GIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use GIL
+BLK: use GIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use GIL
+BLK: use GIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use GIL
+BLK: use GIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+Producer-2.1
+Producer-3.1
+Producer-4.1
+Producer-5.1
+Producer-6.1
+Producer-7.1
+Producer-8.1
+Producer-9.1
+Producer-2.2
+Producer-3.2
+Producer-4.2
+Producer-15.1
+Producer-14.1
+Producer-13.1
+Producer-12.1
+Producer-11.1
+Producer-12.2
+Producer-8.2
+Producer-12.3
+Producer-21.1
+Producer-20.1
+Producer-21.2
+Producer-21.3
+Producer-4.3
+Producer-15.2
+Producer-3.3
+Producer-15.3
+Producer-14.2
+Producer-13.2
+Producer-11.2
+Producer-8.3
+Producer-12.4
+Producer-21.4
+Producer-2.3
+Producer-12.5
+Producer-23.1
+Producer-25.1
+Producer-24.1
+Producer-22.1
+Producer-19.1
+Producer-18.1
+Producer-17.1
+Producer-9.2
+Producer-20.2
+Producer-4.4
+Producer-15.4
+Producer-16.1
+Producer-13.3
+Producer-11.3
+Producer-8.4
+Producer-21.5
+Producer-3.4
+Producer-12.6
+Producer-2.4
+Producer-23.2
+Producer-13.4
+Producer-11.4
+Producer-14.3
+Producer-7.2
+Producer-6.2
+Producer-25.2
+Producer-24.2
+Producer-22.2
+Producer-19.2
+Producer-18.2
+Producer-9.3
+Producer-20.3
+Producer-4.5
+Producer-15.5
+Producer-16.2
+Producer-8.5
+Producer-1.1
+Producer-3.5
+Producer-12.7
+Producer-2.5
+Producer-23.3
+Producer-13.5
+Producer-11.5
+Producer-14.4
+Producer-7.3
+Producer-11.6
+Producer-21.6
+Producer-25.3
+Producer-17.2
+Producer-6.3
+Producer-24.3
+Producer-22.3
+Producer-19.3
+Producer-18.3
+Producer-9.4
+Producer-20.4
+Producer-4.6
+Producer-10.1
+Producer-16.3
+Producer-8.6
+Producer-1.2
+Producer-3.6
+Producer-12.8
+Producer-2.6
+Producer-23.4
+Producer-13.6
+Producer-14.5
+Producer-11.7
+Producer-19.4
+Producer-7.4
+Producer-15.6
+Producer-5.2
+Producer-3.7
+Producer-17.3
+Producer-22.4
+Producer-18.4
+Producer-9.5
+Producer-20.5
+Producer-4.7
+Producer-10.2
+Producer-16.4
+Producer-8.7
+Producer-1.3
+Producer-12.9
+Producer-2.7
+Producer-23.5
+Producer-13.7
+Producer-14.6
+Producer-11.8
+Producer-3.8
+Producer-19.5
+Producer-7.5
+Producer-15.7
+Producer-5.3
+Producer-17.4
+Producer-22.5
+Producer-18.5
+Producer-9.6
+Producer-20.6
+Producer-25.4
+Producer-16.5
+Producer-8.8
+Producer-1.4
+Producer-12.10
+Producer-2.8
+Producer-23.6
+Producer-13.8
+Producer-7.6
+Producer-1.5
+Producer-14.7
+Producer-11.9
+Producer-3.9
+Producer-19.6
+Producer-15.8
+Producer-5.4
+Producer-17.5
+Producer-22.6
+Producer-18.6
+Producer-9.7
+Producer-20.7
+Producer-25.5
+Producer-16.6
+Producer-8.9
+Producer-15.9
+Producer-17.6
+Producer-13.9
+Producer-12.11
+Producer-10.3
+Producer-7.7
+Producer-1.6
+Producer-14.8
+Producer-11.10
+Producer-3.10
+Producer-19.7
+Producer-5.5
+Producer-22.7
+Producer-18.7
+Producer-9.8
+Producer-20.8
+Producer-16.7
+Producer-8.10
+Producer-11.11
+Producer-25.6
+Producer-15.10
+Producer-17.7
+Producer-13.10
+Producer-12.12
+Producer-10.4
+Producer-7.8
+Producer-1.7
+Producer-14.9
+Producer-3.11
+Producer-19.8
+Producer-5.6
+Producer-4.8
+Producer-7.9
+Producer-16.8
+Producer-8.11
+Producer-11.12
+Producer-25.7
+Producer-10.5
+Producer-18.8
+Producer-10.6
+Producer-9.9
+Producer-20.9
+Producer-15.11
+Producer-17.8
+Producer-13.11
+Producer-12.13
+Producer-1.8
+Producer-14.10
+Producer-3.12
+Producer-22.8
+Producer-5.7
+Producer-3.13
+Producer-19.9
+Producer-3.14
+Producer-7.10
+Producer-16.9
+Producer-8.12
+Producer-11.13
+Producer-25.8
+Producer-10.7
+Producer-20.10
+Producer-13.12
+Producer-4.9
+Producer-9.10
+Producer-15.12
+Producer-17.9
+Producer-12.14
+Producer-1.9
+Producer-14.11
+Producer-22.9
+Producer-5.8
+Producer-24.4
+Producer-1.10
+Producer-18.9
+Producer-11.14
+Producer-6.4
+Producer-23.7
+Producer-7.11
+Producer-16.10
+Producer-8.13
+Producer-25.9
+Producer-10.8
+Producer-20.11
+Producer-13.13
+Producer-2.9
+Producer-17.10
+Producer-24.5
+Producer-5.9
+Producer-18.10
+Producer-11.15
+Producer-7.12
+Producer-19.10
+Producer-3.15
+Producer-4.10
+Producer-9.11
+Producer-15.13
+Producer-16.11
+Producer-8.14
+Producer-25.10
+Producer-10.9
+Producer-20.12
+Producer-13.14
+Producer-2.10
+Producer-17.11
+Producer-24.6
+Producer-5.10
+Producer-12.15
+Producer-7.13
+Producer-3.16
+Producer-9.12
+Producer-14.12
+Producer-22.10
+Producer-1.11
+Producer-6.5
+Producer-3.17
+Producer-23.8
+Producer-19.11
+Producer-11.16
+Producer-16.12
+Producer-8.15
+Producer-25.11
+Producer-10.10
+Producer-20.13
+Producer-13.15
+Producer-2.11
+Producer-24.7
+Producer-5.11
+Producer-17.12
+Producer-4.11
+Producer-7.14
+Producer-9.13
+Producer-1.12
+Producer-3.18
+Producer-25.12
+Producer-1.13
+Producer-25.13
+Producer-12.16
+Producer-15.14
+Producer-14.13
+Producer-22.11
+Producer-6.6
+Producer-23.9
+Producer-19.12
+Producer-6.7
+Producer-16.13
+Producer-8.16
+Producer-10.11
+Producer-18.11
+Producer-2.12
+Producer-20.14
+Producer-13.16
+Producer-17.13
+Producer-4.12
+Producer-7.15
+Producer-9.14
+Producer-3.19
+Producer-1.14
+Producer-25.14
+Producer-14.14
+Producer-11.17
+Producer-12.17
+Producer-15.15
+Producer-22.12
+Producer-6.8
+Producer-16.14
+Producer-8.17
+Producer-10.12
+Producer-18.12
+Producer-2.13
+Producer-20.15
+Producer-13.17
+Producer-17.14
+Producer-4.13
+Producer-9.15
+Producer-3.20
+Producer-1.15
+Producer-25.15
+Producer-14.15
+Producer-11.18
+Producer-15.16
+Producer-22.13
+Producer-16.15
+Producer-17.15
+Producer-14.16
+Producer-6.9
+Producer-8.18
+Producer-10.13
+Producer-18.13
+Producer-2.14
+Producer-20.16
+Producer-13.18
+Producer-4.14
+Producer-9.16
+Producer-3.21
+Producer-1.16
+Producer-25.16
+Producer-9.17
+Producer-11.19
+Producer-15.17
+Producer-22.14
+Producer-16.16
+Producer-14.17
+Producer-6.10
+Producer-8.19
+Producer-10.14
+Producer-18.14
+Producer-2.15
+Producer-20.17
+Producer-13.19
+Producer-4.15
+Producer-3.22
+Producer-1.17
+Producer-8.20
+Producer-20.18
+Producer-13.20
+Producer-3.23
+Producer-25.17
+Producer-9.18
+Producer-11.20
+Producer-15.18
+Producer-22.15
+Producer-16.17
+Producer-14.18
+Producer-6.11
+Producer-10.15
+Producer-18.15
+Producer-2.16
+Producer-4.16
+Producer-24.8
+Producer-8.21
+Producer-1.18
+Producer-20.19
+Producer-13.21
+Producer-3.24
+Producer-25.18
+Producer-9.19
+Producer-11.21
+Producer-15.19
+Producer-22.16
+Producer-17.16
+Producer-14.19
+Producer-6.12
+Producer-10.16
+Producer-18.16
+Producer-2.17
+Producer-4.17
+Producer-3.25
+Producer-14.20
+Producer-16.18
+Producer-5.12
+Producer-7.16
+Producer-24.9
+Producer-8.22
+Producer-1.19
+Producer-20.20
+Producer-13.22
+Producer-25.19
+Producer-9.20
+Producer-11.22
+Producer-15.20
+Producer-22.17
+Producer-17.17
+Producer-6.13
+Producer-10.17
+Producer-18.17
+Producer-2.18
+Producer-4.18
+Producer-3.26
+Producer-14.21
+Producer-16.19
+Producer-23.10
+Producer-5.13
+Producer-7.17
+Producer-24.10
+Producer-8.23
+Producer-1.20
+Producer-20.21
+Producer-13.23
+Producer-25.20
+Producer-9.21
+Producer-11.23
+Producer-15.21
+Producer-22.18
+Producer-17.18
+Producer-6.14
+Producer-10.18
+Producer-18.18
+Producer-2.19
+Producer-4.19
+Producer-3.27
+Producer-14.22
+Producer-16.20
+Producer-19.13
+Producer-12.18
+Producer-5.14
+Producer-7.18
+Producer-24.11
+Producer-8.24
+Producer-1.21
+Producer-20.22
+Producer-13.24
+Producer-25.21
+Producer-9.22
+Producer-11.24
+Producer-22.19
+Producer-17.19
+Producer-6.15
+Producer-10.19
+Producer-18.19
+Producer-2.20
+Producer-4.20
+Producer-3.28
+Producer-14.23
+Producer-16.21
+Producer-23.11
+Producer-15.22
+Producer-7.19
+Producer-8.25
+Producer-5.15
+Producer-24.12
+Producer-1.22
+Producer-20.23
+Producer-13.25
+Producer-9.23
+Producer-11.25
+Producer-25.22
+Producer-19.14
+Producer-17.20
+Producer-6.16
+Producer-10.20
+Producer-18.20
+Producer-2.21
+Producer-4.21
+Producer-3.29
+Producer-14.24
+Producer-16.22
+Producer-23.12
+Producer-6.17
+Producer-15.23
+Producer-22.20
+Producer-23.13
+Producer-23.14
+Producer-7.20
+Producer-8.26
+Producer-5.16
+Producer-24.13
+Producer-1.23
+Producer-20.24
+Producer-13.26
+Producer-9.24
+Producer-11.26
+Producer-25.23
+Producer-19.15
+Producer-17.21
+Producer-10.21
+Producer-18.21
+Producer-2.22
+Producer-4.22
+Producer-14.25
+Producer-16.23
+Producer-6.18
+Producer-15.24
+Producer-22.21
+Producer-24.14
+Producer-17.22
+Producer-14.26
+Producer-23.15
+Producer-7.21
+Producer-8.27
+Producer-5.17
+Producer-1.24
+Producer-20.25
+Producer-13.27
+Producer-9.25
+Producer-11.27
+Producer-25.24
+Producer-19.16
+Producer-10.22
+Producer-18.22
+Producer-2.23
+Producer-16.24
+Producer-6.19
+Producer-20.26
+Producer-25.25
+Producer-6.20
+Producer-4.23
+Producer-4.24
+Producer-15.25
+Producer-22.22
+Producer-24.15
+Producer-17.23
+Producer-14.27
+Producer-23.16
+Producer-7.22
+Producer-8.28
+Producer-5.18
+Producer-1.25
+Producer-13.28
+Producer-9.26
+Producer-11.28
+Producer-19.17
+Producer-18.23
+Producer-2.24
+Producer-10.23
+Producer-16.25
+Producer-20.27
+Producer-25.26
+Producer-6.21
+Producer-23.17
+Producer-5.19
+Producer-13.29
+Producer-19.18
+Producer-17.24
+Producer-25.27
+Producer-23.18
+Producer-4.25
+Producer-15.26
+ProducerBLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use GIL
+BLK: use GIL
+BLK: use WIL
+BLK: use GIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use GIL
+BLK: use GIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use GIL
+BLK: use GIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use WIL
+BLK: use GIL
+BLK: use WIL
+BLK: use WIL
+BLK: use GIL
+BLK: use GIL
+BLK: use WIL
+BLK: use WIL
+BLK: use WIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL
+BLK: use GIL

@@ -1,0 +1,142 @@
+extern "signal.h" {
+#include <signal.h>
+}
+#include "dynlib.h"
+#include "config.h"
+
+extern void init_modules ();
+extern void segv (int);
+extern void sigpipe (int);
+extern PyFuncObj *BIOS_func (__object__*);
+extern void *get_boot_ctx ();
+
+static slow void import_compiled (int argc, char **argv)
+{
+	char *fnm = argv [0];
+
+	/*
+	** We call a python function (or module -- it's the same)
+	** Because of stackless the function call returns a vm_context.
+	** Then we call main_thread() with this context which really
+	** enters boot_pyvm(). We must also prepare the context to
+	** have the static boot_ctx as its caller and initialize
+	** the outmost exception handler.
+	*/
+
+	/* To skip BOOT.pyc enable the '0' below to '1'.
+	 * That's useful if we get into bootstrap problems.  */
+	StringObj *dot = new StringObj (".");
+	init_modules ();
+#ifdef	ICECUBE
+	if (0) {
+#else
+	if (0 || access (PYVM_HOME "pyvm/BIOS.pyc", R_OK)) {
+#endif
+		REFPTR RETVAL;
+		REFPTR module = new ModuleObj (dot, Interns.__main__);
+		REFPTR MAIN = load_compiled (fnm, module.o);
+		globalocals->xsetitem (Interns.__file__, new StringObj (fnm));
+		REFPTR startfunc = new PyFuncObj (MAIN.o, globalocals, globalocals);
+		REFPTR bootfunc = BIOS_func (startfunc.o);
+		{
+			/*-*-*-*-*-*-*-*-*-*-*-*-*/
+			REFPTR x;
+			bootfunc->call (&x, &x, 0);
+			/*-*-*-*-*-*-*-*-*-*-*-*-*/
+
+			/* default exception handling block. used by sys.exc_info
+			   when there is no active exception handling block.  */
+			//except0 [0] = bootfunc.as_func->codeobj;
+			bootfunc.as_func->exc_loc = 0;
+			CtxSw.vm->LTOS = 1;
+			CtxSw.vm->LOOPS [0].setup_type = TYPE_HB;
+			//CtxSw.vm->LOOPS [0].stacktop = except0;
+		}
+		CtxSw.vm->caller = 0;
+	} else {
+		REFPTR module = new ModuleObj (dot, Interns.__main__);
+#ifdef	ICECUBE
+		REFPTR MAIN = load_compiled ("memfs://BIOS.pyc", module.o);
+#else
+		REFPTR MAIN = load_compiled (PYVM_HOME "pyvm/BIOS.pyc", module.o);
+#endif
+		REFPTR startfunc = new PyFuncObj (MAIN.o, globalocals, globalocals);
+		REFPTR x;
+		startfunc->call (&x, &x, 0);
+		//except0 [0] = startfunc.as_func->codeobj;
+		startfunc.as_func->GC_ROOT ();
+		CtxSw.vm->caller = get_boot_ctx ();
+	}
+	RC = new Task (CtxSw.vm, 0);
+	main_thread (CtxSw.vm);
+}
+
+extern void argc_argv (int, char**);
+
+/**+*+*+*+*/
+// load memfs from read-only data and boot from memfs://BIOS.pyc.
+// "indent" plonks for very large arrays. We should disable indent
+// for it?
+#ifdef ICECUBE
+#include "ICECUBE.c"
+#include "zlib/zlib.h"
+
+extern REFPTR memfs_root;
+
+slowcold static void load_icecube ()
+{
+	unsigned long tmplen = sizeof_icecubicle * 4;
+	unsigned char *tmp = __malloc (tmplen);
+	if (uncompress (tmp, &tmplen, icecubicle, sizeof_icecubicle)) {
+		/* perhaps increasing tmplen will fix it */
+		fprintf (stderr, "CANNOT UNZIP MEMFS IMAGE!\n");
+		exit (1);
+	}
+	REFPTR M = r_marshal (tmp, tmplen, 0);
+	memfs_root.as_dict->update (DictObj.cast (tuple2dict (M)));
+	__free (tmp);
+}
+
+slowcold __object__ *tuple2dict (REFPTR t)
+{
+	REFPTR D = new DictObj;
+	REFPTR E, V;
+	int i, l = t.as_tuplen->len;
+
+	for (i = 0; i < l; i++) {
+		E = t.as_tuplen->__xgetitem__ (i);
+		V = E.as_tuplen->__xgetitem__ (1);
+		if (Tuplen.isinstance (V.o))
+			V = tuple2dict (V);
+		D.as_dict->xsetitem (E.as_tuplen->__xgetitem__ (0), V.o);
+	}
+
+	return D.Dpreserve ();
+}
+#endif /*+*+*+*+*+*+*+*+*/
+
+static void sigfpe (int)
+{
+whereami ();
+	RaiseFPE ();
+}
+
+int main (int argc, char **argv)
+{
+#if	TRACEBACK_LEVEL > 1
+	// XXX: MOVE ELSEWHERE
+fprintf (stderr, "TRACEBACK_LEVEL=%i!\n", TRACEBACK_LEVEL);
+#endif
+	signal (SIGSEGV, segv);
+	signal (SIGPIPE, sigpipe);
+	signal (SIGFPE, sigfpe);
+	argc_argv (argc - 1, argv + 1);
+	initialize ();
+#ifdef ICECUBE
+	load_icecube ();
+#endif
+	import_compiled (argc - 1, argv + 1);
+	delete OUT;
+	delete ERR;
+}
+

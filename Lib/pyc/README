@@ -1,0 +1,72 @@
+
+
+WARNING
+=======
+
+pyc has not been tested besides bootstrapping itself and running
+some simple benchmarks!
+Please test before attempting to do anything serious with it.
+Reports that it worked or it didn't are most welcome.
+
+
+
+USAGE
+=====
+
+As a package:
+
+	from pyc import compileFile
+	compileFile ('file.py')
+
+From pyc.py:
+
+	python pyc.py [py-files]
+
+But suppose you want to run a file pystone.py with pyc:
+
+	python pyc.py -O3 --show-marks pystone.py
+	python pystone.pyc	# <===== run the pyc file!!!
+
+some times python recompiles files with its own compiler.
+Executing the .pyc file is a sure way to avoid this.
+
+'-O3' enables the best optimizations but be careful with
+locals() since local variables may disappear!
+
+
+
+PYTHON VERSION
+==============
+
+pyc can produce 2.4 and 2.3 bytecode
+
+
+DEVELOPMENT
+===========
+
+If you change anything make sure to run test_bootstrap.py
+You can also run test_libsize.py to see how many and which
+optimizations happen while compiling the toplevel of the
+python standard library. (output copied to garbage/)
+
+
+PROJECT
+=======
+
+Can you write a parser that takes perl and generates AST?
+
+
+CREDITS
+=======
+
+60% of pyc is from python's standard library compiler.
+Many thanks to the folks who wrote it.
+
+
+FEEDBACK
+========
+
+homepage: http://students.ceid.upatras.gr/~sxanth/pyc/
+mailing list: http://www.freelists.org/list/pyc
+
+Stelios Xanthakis <sxanth@cs.teiath.gr>

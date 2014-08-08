@@ -1,0 +1,9 @@
+applications
+============
+
+several apps that are found in pyvm's library but are useful even
+as standalone applications.
+
+indent.py:	reindent python source code with tabs-only or spaces-only
+pycc.py:	run the pyc compiler to covert .p[ye] to .pyc
+re2c.py:	convert regular expressions to C (pyvm only)

@@ -1,0 +1,396 @@
+#
+# Template file for writting wrappers for other toolkits
+#
+# Copyright (C) <year>, <name>
+#
+
+import <toolkit>
+
+#
+# For each class we have the methods that are EXPECTED to be
+#  there because they can be called from code
+# We also present the attributes each object is expected to have
+# You'll have to add __init__ functions that actually generate
+#  the real widget (usually named self.this) according to the
+#  parameters of the sheet_object
+#
+
+
+#
+# Utils
+#
+class transplant: 
+   def __init__(self, method, host, method_name=None):
+      self.host = host
+      self.method = method
+      setattr(host, method_name or method.__name__, self)
+   def __call__(self, *args, **kwargs):
+      nargs = [self.host]
+      nargs.extend(args)
+      return apply(self.method, nargs, kwargs)
+
+class ___disablable___:
+    def disable (self):
+	<<custom way of disabling a widget>>
+    def enable (self):
+	<<custom way of disabling a widget>>
+
+def functype(): pass
+
+class ___implant___:
+    def implant (self, fname, func):
+	if type (func) == type (functype):
+	    name = func.__name__
+	    transplant (func, self, name)
+	    exec 'self.'+fname+'=self.'+name
+	else:
+	    exec 'self.'+fname+'= func'
+
+class ___vexec___:
+    def vexec (self, code):
+	if code:
+	    if type (code) == type (''):
+	        exec code
+	    else: code ()
+
+#
+# label
+#
+
+class labelobject (___disablable___):
+    # attributes
+        <<self.master = master>> points to window/sheet/dialog
+    # available to code
+    def get_text (self):
+	<<put code here>>
+    def set_text (self, text):
+	<<put code here>>
+
+#
+# buttons
+#
+
+class buttonobject(___disablable___, ___vexec___):
+    # attributes
+        <<self.master = master>>
+        <<self.code = cmd>>
+	<<self.rcode = rcmd>>
+    def <<click callback>> (self, *args):
+	self.vexec (self.code)
+    def <<right click callback>> (self, widget, event):
+	self.vexec (self.rcode)
+
+class checkbuttonobject (___disablable___, ___vexec___):
+    # attributes
+	<<self.master = master>>
+	<<self.code = cmd>>
+	<<self.active = active>>
+    def <<toggle callback>> (self, *args):
+	self.active = not self.active
+	self.vexec (self.code)
+    # macrocode
+    def activate (self, value):
+	<<put code here>>
+	# if the toolkit won't call the <<toggle callback>> we must call it here
+
+class togglebuttonobject (___disablable___, ___vexec___):
+    # attributes
+        <<self.master = master>>
+        <<self.cmdact = cmda>>
+        <<self.cmddeact = cmdd>>
+    def <<click callback>> (self, *args):
+	if <<active>>
+	    self.vexec (self.cmdact)
+	else:
+	    self.vexec (self.cmddeact)
+    # macrocode
+    def toggle (self):
+	<<put code here>>
+	# if the toolkit won't call the <<click callback>> we must call it here
+    def isOn (self):
+	<<put code here>>
+
+# this is really the entire group of radio buttons. programer sees this
+class transistorobject (___vexec___):
+    # attributes
+	<<self.cmd = cmd>>
+	<<self.current = None>>
+    def <<radio activated callback>> (self, name):
+	self.current = name
+	self.vexec (self.cmd)
+    def activate (self, name):
+	<<activate radio button named that>>
+	# if the toolkit won't call the <<radio activated callback>> we must call it here
+	# IFF it's not already active.
+    def disable (self, name):
+	<<disable radio button named that>>
+    def enable (self, name):
+	<<enable radio button named that>>
+
+#
+# image
+#
+
+class imageobject:
+    def load (self, image):
+	<<put your code here>>
+
+#
+# text entries
+#
+
+class textentry_object (___disablable___, ___vexec___):
+    # attributes
+        <<self.master = master>>
+        <<self.code = cmd>>
+    def <<return callback>> ():
+        self.vexec (self.code)
+    # Public functions accessible from self.code
+    def text (self):
+	<<put code here>>
+    def set_text (self, text):
+	<<put code here>>
+
+class text_Object(___disablable___):
+    def get_text (self):
+	<<put code here>>
+    def set_text (self, text):
+	<<put code here>>
+    def set_editable (self, setting):
+	<<put code here>>
+
+#
+# Lists and trees
+#
+# list/stree/tree are very similar and'd better use some inheritance
+# to do it. Here we present the interface only
+#
+
+class list_object:
+    # attributes
+	<<self.master = master>>
+	<<self.implant ('gcode', gcode)>>
+	<<self.scode = scode>>
+	<<self.ecode = ecode>>
+	<<self.rclick = rclick>>
+    def __init__ (self, <<whatever>>)
+	<<put code here>>
+	<<set the attributes and call...>>
+	self.reload ()
+    def <<right click callback>> (self)
+	<<set self.row to the data of the row clicked>>
+	self.vexec (self.rclick)
+    def <<click callback>> (self)
+	<<set self.row to the data of the row clicked>>
+	self.vexec (self.scode)
+    def <<double-click/return callback>> (self)
+	<<set self.row to the data of the row clicked>>
+	self.vexec (self.ecode)
+    def reload (code = None):
+	if code: self.gcode = code
+	<<clear the list>>
+	<<prepare>>
+        self.vexec (self.gcode)
+	<<finir>>
+    def sub (self):
+	pass
+    def unsub (self):
+	pass
+    def addrow (self, data):
+	<<put code here>>
+
+class stree_object:
+    # Just like the list_object, only sub and unsub are working
+    def sub (self):
+	<<put code here>>
+    def unsub (self):
+	<<put code here>>
+
+class list_object:
+    # Just like the list object, only addrow takes an extra argument
+    def sub (self):
+	pass
+    def unsub (self):
+	pass
+    def addrow (self, data, expander = None):
+	<<put code here>>
+
+#
+# The popup menu
+#
+
+class popup_object (___vexec___, ___implant___):
+    def __init__(self, master, code, *args, **kw):
+	for i in kw.keys():
+	    print "setting attr", i, kw [i]
+	    setattr (self, i, kw [i])
+	self.master = master
+	self.implant ('code', code)
+	<< prepare the popup to receive item/sub/unsub/sep commands >>
+	self.vexec (self.code)
+	<< put code to enter the popup menu >>
+    def <<callback item selected>> (self, widget, code):
+        self.vexec (code)
+    # to macrocode
+    def item (self, name, code):
+	<<put code here>>
+    def sub (self, name):
+	<<put code here>>
+    def unsub (self):
+	<<put code here>>
+    def sep (self):
+	<<put code here>>
+
+#
+# workspaces
+#
+
+class notebook_object(___disablable___):
+    # attributes
+	<<self.master = master>>
+
+#
+# main sheet class
+#
+
+class sheet_object:
+    def transplant (self, method, method_name=None):
+	transplant (method, self, method_name)
+    def popup (self, code, *args, **kw):
+	<<use the popup_object>>
+    def openFileDialog (self, name=''):
+	<<put code here>>  return None if canceled
+    def saveFileDialog (self, name=''):
+	<<put code here>>  return None if canceled
+    def start_construction (self):
+	<<put code here>>
+    def end_construction (self):
+	<<put code here>>
+    # Protected
+    BaseGUI='put toolkit name here'
+    def __init__ (self, code=None):
+	self.code = code
+	if code:
+	    self.start_construction ()
+	    exec code in globals(), locals ()
+	    self.end_construction ()
+    def button (self, name=None, text='button', cmd='0', rclick=None):
+	<<invoke button_object>>
+	return it
+    def checkbutton (self, name=None, text='check', cmd=None, active=0):
+	<<invoke checkbutton_object>>
+	return it
+    def tbutton (self, name=None, text='tbutton', cmdact='', cmddeact='', active=0):
+	<<invoke togglebutton_object>>
+	return it
+    def textentry (self, name=None, text='', length=0, cmd='', label=None):
+        if label != None:
+            self.open_hbox ()
+            self.label (text=label)
+            b = self.textentry (name, text, length, cmd)
+            self.close_box ()
+	    return b
+	<<invoke textentry_object>>
+	return it
+    def label (self, name=None, text='label'):
+	<<invoke label_object>>
+	return it
+    def radio (self, name=None, text='radio', active=False):
+	<<put code here. Do whatever you want but cooperate with the
+	  transistor object created at open_radio()>>
+    def editor (self, name=None, dims = (50, 10), font=None, wrap=0, editable=True):
+	<<invoke text_object>>
+	return it
+    def listbox (self, name=None,gcode='',colnam=[''],scode=None,ecode=None,dims=(20,10),rclick=None):
+	<<invoke list_object>>
+	return it
+    def treebox (self, name=None, gcode='', colnam=[''], scode=None, ecode=None, dims=(20,10), rclick=None):
+	<<invoke stree_object>>
+	return it
+    def streebox (self, name=None, gcode='', colnam=[''], scode=None, ecode=None, dims=(20,10), rclick=None):
+	<<invoke tree_object>>
+	return it
+    def image (self, filename=None, name=None):
+	<<invoke image_object>>
+	return it
+    def separator (self):
+	<<put code here. Depending on the current container make separator>>
+    def hsplitter (self):
+	<<put code here>>	applies for the next two widgets that'll be created
+    def vsplitter (self):
+	<<put code here>>
+    def open_hbox (self, text=None):
+	<<put code here>>
+    def open_vbox (self, text=None): 
+	<<put code here>>
+    def close_box (self):
+	<<put code here>>
+    def open_radio (self, cmd=None, name=None):
+	<<invoke transistor_object>>
+	return it
+    def close_radio (self):
+	<<complete transistor object created above>>
+    def tabworkspace (self, name=None):
+	<<invoke notebook_object>>
+	return it
+    def MDIworkspace (self, name=None):
+	# if you don't have MDI:
+	return self.tabworkspace (name)
+
+#
+# Main class namespace
+#
+
+class Window (sheet_object):
+    def start_construction (self):
+	<<possible extra code>>
+	sheet_object.start_construction (self)
+	<<possible extra code>>
+    def end_construction (self):
+	<<possible extra code>>
+	sheet_object.end_construction (self)
+	<<possible extra code>>
+    def __init__ (self, code=None):
+	sheet_object.__init__ (self, code)
+    def settitle (self, title):
+	<<put code here>>
+    def quit (self, x):
+	<<put code here>>
+
+class Sheet (sheet_object, ___disablable___):
+    def start_construction (self):
+	<<possible extra code>>
+	sheet_object.start_construction (self)
+	<<possible extra code>>
+    def __init__ (self, workspace, code=None):
+	self.workspace = workspace
+	sheet_object.__init__ (self, code)
+    def end_construction (self):
+	<<possible extra code>>
+	sheet_object.end_construction (self)
+	<<possible extra code>>
+    def settitle (self, title):
+	<<put code here>>
+
+class Dialog (sheet_object):
+    def start_construction (self):
+	<<possible extra code>>
+	sheet_object.start_construction (self)
+	<<possible extra code>>
+    def end_construction (self):
+	<<possible extra code>>
+ 	sheet_object.end_construction (self)
+	<<possible extra code>>
+    def __init__ (self, master, code=None):
+	self.master = master
+	sheet_object.__init__ (self, code)
+    def settitle (self, title):
+	<<put code here>>
+    def close (self, *args):
+	<<put code here>>
+
+def exec_loop ():
+	<< call toolkit exec_loop. Once >>
+
+def terminate ():
+	<< kill it >>

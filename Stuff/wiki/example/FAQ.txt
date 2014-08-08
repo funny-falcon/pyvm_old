@@ -1,0 +1,22 @@
+FAQ
+===
+
+you can't have a list under a such
+
+*   How does this wiki work?
+
+    >    This is a simple public wiki. Everybody can *edit* the *cache*.
+    >    Those who know the password can *commit* the cache into *head*.
+
+*   How can I create a new page?
+
+    >    Only the administrator can create new pages. However, the
+    >    there are many unused pages at [the Index](/special/Index.html).
+
+*   Is there no preview?
+
+    >    No. Patches are welcome!
+
+*   And what about the wiki?
+
+    >    Nobody knows

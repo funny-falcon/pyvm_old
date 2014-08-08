@@ -1,0 +1,477 @@
+Module DLL
+==========
+
+The DLL module is used to wrap OpenGL, SDL, ...
+This document is useful for further hacking these libraries
+or adding new libraries.
+
+
+INTRODUCTION
+~~~~~~~~~~~~
+
+The DLL module is something between the dl-module and the ctypes-module.
+It allows us to wrap functions from C libraries at runtime.
+
+It is more advanced than the dl-module, which is barely usable.
+It is less complicated than ctypes which, um, implements C types,
+ structures, global variables, etc.
+
+The DLL module can only wrap functions but also takes care of argument
+conversions, return values, releasing the GIL, etc.
+
+An introductory example:
+
+	import DLL
+	libc = DLL.dllopen ('libc.so')
+	mytime = libc.get (('', 'time', 'i'))
+	print mytime (0)
+
+Here the C function 'time' from the Dynamic Library 'libc' is
+wrapped behind the python object 'mytime'.
+
+
+CJIT
+~~~~
+
+With the DLL module we can create C code to speed up some operations.
+We do that by compiling C code at runtime and then linking this code
+to our python application.  Technique also known as 'Just In C Time'
+The idea is not entirely new since this is also possible in CPython
+with 'weave' and 'pyinline', (although not standard).
+
+Some theory:
+
+	So, how fast is the bytecode?
+	That depends.  It actually depends on the cost of the operation
+	versus the cost of the execution of one opcode.
+	For example in
+
+		D1.update (D2)
+
+	if the dictionaries D1 and D2 have thousands of keys then 99.9%
+	of the time will be spent in updating the dictionary and only 0.1%
+	in the bytecode vm.  Therefore this is an operation that we want
+	to do in bytecode.  The C version of the same thing would not be
+	any faster (in fact it could be slower due to code cache misses).
+
+	A sample case where bytecode is weak is arithmetic operations.
+	If x,y,z are all floating point numbers, then:
+
+		x = (-0.25*x-25.0*y)/(z*z)
+
+	needs about 10 bytecode instructions.
+	In this case the bytecode version is very inefficient compared to
+	the C version of the same formula.
+
+So this is the application of the CJIT:
+
+	import os, DLL
+
+	PROGRAM = r"""
+		double formula (double x, double y, double z)
+		{
+			return (-0.25*x-25.0*y)/(z*z);
+		}
+	"""
+	file ('tmpfile.c', 'w').write (PROGRAM)
+	os.system ('gcc -fpic -O3 -shared tmpfile.c -o mylib.so')
+	mylib = DLL.dllopen ('./mylib.so')
+	myformula = mylib.get (('d', 'formula', 'ddd'))
+
+	print myformula (1.1, 2.2, 3.3)
+
+Of course, with this approach, the C code cannot call back to
+pyvm functions and therefore it can't manipulate lists, tuples,
+dictionarys and generally python objects.  But this is good!
+This is "THE BARRIER" between what should be done in python and what
+should be done in C.  If the CJIT had access to the C API of its
+python implementation, it would:
+
+	1) depend on it and therefore wouldn't be useful for
+	   other python implementations
+	2) people would be tempted to do everything in C
+
+With CJIT, users are encouraged to structure their code in such
+a way that it exposes possibilities to use CJIT.
+
+	(C is a beautiful and easy language after all.	/runs)
+
+	#######---------------Benchmark-----------------------
+	import os
+	import DLL
+
+	# The function DLL.CJIT will compile and dynamically link a C program
+
+	formula = DLL.CJIT (r"""
+		double f (double x, double y, double z)
+		{
+			return (-0.25*x-25.0*y)/(z*z);
+		}
+	""").get (('d', 'f', 'ddd'))
+
+	def f1 ():
+	    global R
+	    x, y, z= 1.1, 2.2, 3.3
+	    f = formula
+	    for i in xrange (1000000):
+		R = f (x, y, z)
+
+	def f2 ():
+	    global R
+	    x, y, z= 1.1, 2.2, 3.3
+	    for i in xrange (1000000):
+		R = (-0.25*x-25.0*y)/(z*z)
+
+	from time import time
+	t0=time()
+	f1()
+	print time()-t0
+	t0=time()
+	f2()
+	print time()-t0
+	###########-------------------------------------------------
+
+When we run this we get:
+
+0.80
+0.90
+
+Not a big deal, but you can try the fibonacci numbers for something
+more impressive.
+
+- CJIT of course requires the existance of a C compiler.  Not all systems
+  have such a program.  We can provide alternative implementations in
+  python if the C compiler is not present.
+
+
+MORE CJIT - strings
+~~~~~~~~~~~~~~~~~~~
+
+We can pass python strings to CJIT functions.  A convention that can
+be taken for granted is that all python strings are null terminated.
+(no mention to unicode yet)
+
+Suppose that we want a function called 'lowlet' which will return true
+if all the characters of a string are low case ASCII characters.
+Here is how with the DLL module.
+
+	import os
+	import DLL
+
+	lowlet = DLL.CJIT (r"""
+		int lowlet (char *s)
+		{
+			while (*s)
+				if (*s < 'a' || *s > 'z') return 0;
+				else ++s;
+			return 1;
+		}
+	""").get (('i', 'lowlet', 's'))
+
+	print lowlet ('thisisok')
+	print lowlet ("this ain't")
+
+
+THE GIL
+=======
+
+By default C functions are called with the Global Interpreter Lock
+held.  That means that if the C function blocks and our python
+program is multithreaded, no other threads will run until the C
+function returns.  A blocking call is something like sleep().
+
+Another reason to release the GIL is that the C routine does a lot
+of processing and we want to take advantage of multi-processor
+architectures.
+
+The method 'get' of the dllObject has a second argument whos default
+value is False.  If set to True, the function will be considered
+blocking and the GIL will be released and reaquired when the C function
+is called.  An example of a blocking call:
+
+	import os
+	import DLL
+	import thread
+
+	mylib = DLL.CJIT (r"""
+		#include <stdio.h>
+		void sleepus ()
+		{
+			sleep (10);
+		}
+	""")
+
+	sleepus = mylib.get (('', 'sleepus', ''), True)
+
+	def forevah ():
+	    # releasing the GIL makes sense in multithreaded
+	    # programs.  This is another thread which keeps
+	    # printing "Hi!"
+	    while 1:
+		for i in xrange(2000000):
+		    pass
+		print "Hi!"
+
+	thread.start_new_thread (forevah, ())
+	time.sleep (1)
+	print "SLEEP SOME MORE"
+	sleepus ()
+	print "OKIE DOKIE"
+
+The effect that we want to see when we run this program is that
+while the system call sleep() is called, our interpreter takes the
+oportunity to run the other thread which prints "Hi!".
+If the GIL is not released, this will not happen.
+
+Calling functions that release the GIL is slower.  For one releasing
+and reaquiring the GIL costs a bit and in the case of our first
+benchmark where we want to speed up arithmetic operations, this cost
+is significant.  Secondly, if a C function is considered blocking,
+then the cost of the call is not important.  Such calls are not
+optimized for speed unlike the GIL-holding version which is as
+fast as possible.
+
+
+CALLBACKS
+=========
+
+Some times when we are wrapping C libraries, we want to attach
+callbacks that call back to our interpreter.  For example, the
+function
+
+	void glKeyboardFunc (void (*f)(int,int,int));
+
+which registers a callback function that will be called whenever
+a key is pressed.  Let for the purpose of our documentation
+create such a library function which calls its callback immediately:
+
+	PROGRAM = r"""
+		void call_f (void (*f) ())
+		{
+			f ();
+		}
+	"""
+	mylib = DLL.CJIT (PROGRAM)
+	call_f = mylib.get (('', 'call_f', 'i'))
+
+
+Our goal now is to pass "something" to call_f that will eventually
+call a python function from our python program.
+
+The DLL module provides a (currenly simple) callback factory which
+generates functions without requiring the compilation of any C code.
+Pointers to these functions can be passed and called from C code and
+call back into our interpreter.
+
+We start by creating a callback:
+
+	my_callback = DLL.Callback (('', ''))	# takes no args, returns void
+
+Now 'my_callback' is an allocated "callback object".
+We can register its python callable:
+
+	def foo():
+	    print "I exist!"
+
+	my_callback.set_callback (foo)
+
+And we can pass its C pointer to the C library:
+
+	call_f (my_callback.fptr ())
+
+This last statement, calls the C function call_f, which calls its callback
+pointer to function 'f', which calls our callable object 'my_callback' which
+calls the registered function 'foo'.
+
+The value returned by my_callback.fptr() is always the same and independent
+of the registered function.  So the glKeyboardFunc wrapper would be something
+like this:
+
+	KeyBoard = Callback (('', 'iii'))
+	glKeyboardFunc (KeyBoard.fptr ())
+
+	KeyBoard.set_callback (...)
+
+
+The Callback mechanism automatically takes care of any GIL issues;
+- if call_f was called with the GIL held then calling back into the
+vm is done without caring about the GIL.
+- if call_f was called in blocking mode then the callback object will
+aquire the GIL before performing the callback.
+
+Callback objects are never released.
+
+
+ARRAYS
+======
+
+These are C functions that take a pointer to a {char, short, int,
+long, float, double}.  Suppose such a library function 'fsum' which
+takes a pointer to an array of floats, their count and returns their
+sum:
+
+	PROGRAM = r"""
+		float fsum (float *X, int n)
+		{
+			float ret = 0;
+			while (n--)
+				ret += *X++;
+			return ret;
+		}
+	"""
+
+	mylib = DLL.CJIT (PROGRAM)
+	fsum = mylib.get (('f', 'fsum', 'pfi'))
+
+("pfi" is "pointer to float, int")
+
+What can we pass to these functions.
+
+1) Lists and tuples.  For example:
+
+	VALS = 1.1, 2.2, 3.3
+	print fsum (VALS, len (VALS))
+
+2) arrays from the 'array module'.  In fact this is a great application
+   of the array module.  First an example:
+
+	from array import array
+	VALS = array ('f', [1.1, 2.2, 3.3])
+	print fsum (VALS, len (VALS))
+
+   When we pass arrays it's like passing the argument "by reference";
+   If the C function modifies the values of the array the changes are
+   updated in the array object.  On the other hand, when we pass a list
+   or a tuple, it is converted to an array, the array is passed to
+   the function and then it is destroyed.  So any changes are not
+   updated in the list.  This is like "call by value" and it's also
+   much slower because a new array is constructed and all the elements
+   of the list are copied over to it.
+
+An example of a C function that modifies the values of an array:
+
+	PROGRAM = r"""
+	void finc (float X[], int n)
+	{
+		int i;
+		for (i = 0; i < n; i++)
+			X [i] *= 2.0;
+	}
+	"""
+
+	mylib = DLL.CJIT (PROGRAM)
+	finc = mylib.get (('', 'finc', 'pfi'))
+
+	VALS = array ('f', [1.0, 2.0, 3.0])
+	print VALS
+	finc (VALS, len (VALS))
+	print VALS
+
+arrays can also be used if we want to get multiple values from a C function.
+
+
+FORMAT OF get
+=============
+
+At last!  We get to see the format for the 'get' function.
+The first parameter of 'get' is a tuple of three strings.
+	1) The return type string
+	2) The symbol name in the dll
+	3) The argument types specification
+
+Note that the format of get is NOT 64-bit ready. Use common sense for now.
+
+The following characters can be used for the argument types:
+
+'i':	'int'. Integer and more generally something as big as a CPU
+	register.  32 or 64 bits depending on the architecture.
+	Also sizeof (int)==sizeof (void*), so for functions that
+	get a pointer argument we can use the 'i' format.
+
+	This format should also be used for functions that take
+	a "char" or "short int" argument.  In C calling conventions
+	all these are passed as ints.
+
+	Valid Python Objects: Only python integers may be passed.
+
+'f':	'float' arguments.
+	Valid Python Objects: integers and floats
+
+'d':	'double' arguments.
+	Valid Python Objects: integers and floats
+
+'s':	'char*' arguments.
+	Valid Python Objects: Only Strings.  A pointer to the characters
+	of the string object is passed.  Strings are mutable in C!
+
+'p8':	'char*'
+'p16':	'short int*'
+'p32':	'int*'
+'p64':	'long long*'/'long*'
+'pf':	'float*'
+'pd':	'double*'
+	Valid Python Objects: 
+		- arrays of 'c', 'h', 'i', 'f' and 'd' respectively
+		  passed by reference.
+		- lists and tuples. converted to arrays.
+		- especially for 'p8' we can also pass a string object
+
+'pv':	p32 or p64 depending on the architecture
+
+'v':	'void*' generic pointer.
+	Valid Python Objects: Integers, Strings, any array
+
+For the return value, we can use the strings:
+'':	no return value
+'i':	integer (char, short, int) or generally register size (can be pointer)
+'f':	float
+'d':	double
+'s':	copy string. the real return value of the function must be 'char*' and it
+	must point to a NULL-terminated string which will be *copied* to a new
+	python string. If the string is not NULL-terminated or you don't want to
+	copy into a python string, use 'i' instead to treat the return value as
+	a general purpose pointer. 's' should not be used if the wrapped function
+	may return NULL! In that case use 'i', check that it is non zero and
+	use the function DLL.Strcpy() to make a python string.
+
+There is no support for functions returning structures.
+
+In the case of Callback, the types of the arguments are
+reversed: The callback arguments can be 'ifds' and the return
+type of the callback can be 'ifdsp*v'.
+
+Q: What about signed/unsigned?
+A: Doesn't make any difference.  These specifiers are about the size of
+   the argument.  Signess does not matter to the API of C functions.
+
+Q: These are not user friendly!
+A: Yes. But the user friendly part should be done in python.  These are
+   what the internal C implementation of the module provides.
+
+Q: Wouldn't it be nice if DLL could read header files and extract the
+   function definitions itself?
+A: It certainly would! That is in the TODO list (although lower priority)
+   but for some really huge apps like GTK (4000 functions), it's better
+   to use custom specialized tools for this. Moreover it would be better
+   to generate 'API specs' from header files once so that users won't have
+   to download the entire 40MB GTK toolchain just so the wrapper will work.
+   In other words, we'd rather generate the API and distribute it inside
+   pyvm in a form which is more convenient than C headers.
+
+Q: What about C++?
+A: Forget about it.  C++ has its own name mangling rules.  In order to
+   wrap C++ function we need a C++ compiler and the entire translation
+   unit of the header files!  One solution would be to use the tools
+   'nm' and 'c++filt'.  However, C++'s name mangling is not standarized
+   and different C++ compilers will generate libs with different names.
+
+Q: What about multidimensional arrays?
+A: Arrays of arrays are generally ok.  Arrays of pointers are not.
+
+Q: Isn't this dangerous because it can segfault the VM?
+A: Yes it is. On the other hand if people want to extend python with
+   C libraries they will write C code anyway and therefore the
+   segmentation faults can happen there. Because the C API is more
+   scary and may discourage people who are not careful from doing
+   this is not an excuse. If somebody doesn't feel comfortable with
+   C they shouldn't use the DLL module and CJIT!

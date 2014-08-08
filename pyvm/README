@@ -1,0 +1,37 @@
+WARNING:
+
+The Makefile is kinda broken. If you modify any structures in dynlib.h
+you gotta type "make distclean; make" to be sure that all the .c files will
+be regenerated.  "make o3" for optimized vm.
+
+
+SHORT INSTRUCTIONS:
+
+pyvm is written in lwc. That's a preprocessor that takes a C++-like language
+and generates C. The C files are in cdir.
+
+All the files that end in *.h.c+ are included with #include into main.c+
+We do that to take advantage of extreme inlining and let the compiler analyse
+the side-effects of functions and also because lwc generates code that depends
+on such optimizations.
+
+Description of the files:
+
+	dynlib.h		: main header file
+	seg-malloc.*		: fast segmented allocator
+	module.*		: the hardcoded modules
+	lib*			: C libraries
+	IO.*			: our own IO library, replacement of fstdio
+	threading.*		: theoretically this could be a mini library for
+				   the threading of stackless vms. But tightly related to pyvm.
+
+Almost everything else is very chaotic.
+Usually functions aren't groupped "by object".
+
+In cold.c+ we put various functions that are supposed to be rare and we compile
+that with -Os.
+
+If you are looking for a specific function it can be anywhere!
+Refactoring is welcome.
+
+- In lwc class members don't need to be declared in the class.

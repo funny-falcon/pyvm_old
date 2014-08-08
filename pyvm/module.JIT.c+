@@ -1,0 +1,740 @@
+/*
+ * DLL Module (JIT is a misnomer, historicaly called JIT module)
+ *
+ *	- runtime linking of dynamic libraries and functions
+ *	- generation of callbacks
+ *	- runtime argument conversions python <--> C
+ */
+extern "dlfcn.h" {
+#include <dlfcn.h>
+}
+
+#include "dynlib.h"
+#include "arrayobj.h"
+
+//#define TRACE_DLL
+
+/* argspec parser */
+
+enum {
+	TYPE_VOID, TYPE_NUM, TYPE_FLOAT, TYPE_DOUBLE, TYPE_STRING, TYPE_ZTRING,
+	TYPE_PINT8, TYPE_PINT16, TYPE_PINT32, TYPE_PINT64, TYPE_PFLOAT, TYPE_PDOUBLE,
+	TYPE_PTR,
+};
+
+slow static int sizes (int x)
+{
+	switch (x) {
+		case TYPE_VOID: return 0;
+		case TYPE_NUM: return sizeof (int);
+		case TYPE_FLOAT: return sizeof (float);
+		case TYPE_DOUBLE: return sizeof (double);
+		case TYPE_ZTRING:
+		case TYPE_STRING: return sizeof (char*);
+		default:
+		case TYPE_PTR:
+		case TYPE_PINT8:
+		case TYPE_PINT16:
+		case TYPE_PINT32:
+		case TYPE_PINT64:
+		case TYPE_PFLOAT:
+		case TYPE_PDOUBLE: return sizeof (void*);
+	}
+};
+
+#define TYPE_PPTR TYPE_PINT32
+
+slow static int btype (char **c)
+{
+	switch (*(*c)++) {
+		case 'f': return TYPE_FLOAT;
+		case 'd': return TYPE_DOUBLE;
+		case 'i': return TYPE_NUM;
+		case 's': return TYPE_STRING;
+		case 'z': return TYPE_ZTRING;
+		case 'v': return TYPE_PTR;
+		case 'p': switch (*(*c)++) {
+			case 'f': return TYPE_PFLOAT;
+			case 'd': return TYPE_PDOUBLE;
+			case '8': return TYPE_PINT8;
+			case '1': if (*(*c)++ == '6')
+					return TYPE_PINT16;
+			case '3': if (*(*c)++ == '2')
+					return TYPE_PINT32;
+			case 'v':
+				return TYPE_PPTR;
+			default: RaiseNotImplemented ("SyntaxError on dll.get fmt ptr");
+		}
+		default: RaiseNotImplemented ("SyntaxError on dll.get fmt");
+	}
+}
+
+#define NINLINE_ARG 4
+
+static struct argspecs		// compact? -- we'd like NINLINE_ARG==5 and sizeof (argspecs) == 8
+{
+	union {
+		char *arg_type;
+		char arg_types [NINLINE_ARG];
+	};
+	unsigned char ret_type, argn, rsize;
+	argspecs (StringObj*, StringObj*) noinline;
+inline	bool few_args ()	{ return argn <= NINLINE_ARG; }
+inline	char *argument_types ()	{ return likely (few_args ()) ? arg_types : arg_type; }
+	~argspecs ();
+};
+
+argspecs.argspecs (StringObj *rt, StringObj *at)
+{
+	char *c = rt->str;
+
+	ret_type = rt->len ? btype (&c) : TYPE_VOID;
+	rsize = argn = 0;
+
+	char argt [at->len + 1], i;
+	c = at->str;
+
+	while (*c) {
+		i = argt [argn++] = btype (&c);
+		rsize += sizes (i) < sizeof(long) ? 1 : sizes (i) / sizeof(long);
+	}
+	if_unlikely (!few_args ())
+		arg_type = (char*) __malloc (argn * sizeof *argt);
+	memcpy (argument_types (), argt, argn * sizeof *argt);
+}
+
+argspecs.~argspecs ()
+{
+	if (!few_args ())
+		__free (arg_type);
+}
+
+/* ****************** DLL Object ****************** */
+
+/*
+ * keeps a library dlopened.  A factory of dll-callables
+ */
+
+static DictObj dllMethods __noinit ();
+static const char dllType [] = "Dynamic Library";
+static TypeObj dllTypeObj;
+
+static class dllObj : __destructible__
+{
+	const char *const stype = dllType;
+	const TypeObj &type = &dllTypeObj;
+	DictObj *type_methods = &dllMethods;
+
+	void *dllhandle;
+	REFPTR libname;
+
+   public:
+	dllObj ();
+
+	void do_load (const char*);
+	void *getsym (const char*);
+
+	void print ()		{ print_out (STRL ("<Library>")); }
+	~dllObj ();
+};
+
+static TypeObj dllTypeObj ctor (dllObj._v_p_t_r_);
+
+dllObj.dllObj ()
+{
+	__destructible__.ctor ();
+	dllhandle = 0;
+	libname.ctor ();
+}
+
+void *dllObj.getsym (const char *n)
+{
+	void *r = dlsym (dllhandle, n);
+	if (!r)
+		RaiseNotImplemented ("No such symbol in dll");
+	return r;
+}
+
+void dllObj.do_load (const char *lib)
+{
+	if (!(dllhandle = dlopen (lib, $RTLD_LAZY)))
+{pprint ("crap:", dlerror ());
+		RaiseNotImplemented ("Not implemented dlerror actually....");
+}
+	libname = new StringObj (lib);
+}
+
+dllObj.~dllObj ()
+{
+	if (dllhandle)
+		dlclose (dllhandle);
+}
+
+/* ******************* DLL function Object ******************* */
+
+/*
+ * Unfortunatelly this is very architecture dependant.
+ * Info: Experiments have shown that, in x86/linux all function
+ * arguments are passed with 'pushl' which is pushes a 32bit register.
+ * If the argument is smaller, like a 'char' it is converted to int.
+ * If it's bigger it's done with multiple pushl's (a double is 2 pushls).
+ * The return value is depends on the size and is always returned on
+ * register(s).
+ *
+ * It is perfectly Ok to pass *more* arguments to a function.
+ * No problem at all.
+ *
+ */
+
+static DictObj dlCallableMethods __noinit ();
+static const char dlCallableType [] = "dll callable";
+static TypeObj dlCallableTypeObj;
+
+static class dlCallableObj : __destructible__
+{
+	const char *const stype = dlCallableType;
+	const TypeObj &type = &dlCallableTypeObj;
+	DictObj *type_methods = &dlCallableMethods;
+
+#define	DLL_MAXARG 18	/* 9 doubles in 32 bit */
+
+	union {
+		void *hook;
+		long (*ldlfunc) (long,...);
+		float (*fdlfunc) (long,...);
+		double (*ddlfunc) (long,...);
+	} u;
+
+	bool blocking;
+	argspecs A;
+	REFPTR DLL, name;
+
+   public:
+	void call (REFPTR, REFPTR[], int);
+	void print ();
+};
+
+void dlCallableObj.print ()
+{
+	print_out ("<DLL <"COLB, dllObj.cast (DLL.o)->libname.o, COLE">."COLS,
+		   name.o, COLE" ", (void*)this, ">");
+}
+
+static TypeObj dlCallableTypeObj ctor (dlCallableObj._v_p_t_r_);
+
+dlCallableObj.dlCallableObj (__object__ *d, void *h, argspecs _A, __object__ *n, bool b)
+{
+	__destructible__.ctor ();
+	name.ctor (n);
+	DLL.ctor (d);
+	u.hook = h;
+	blocking = b;
+	A = _A;
+	_A.argn = 0;
+
+	/* Constructor MUST NOT THROW!! move outside */
+	if (A.rsize > DLL_MAXARG)
+		RaiseNotImplemented ("dll callable can take 18 arguments at maximum");
+}
+
+#define LOADVAL(type) *((type*) postfix (vargz, vargz += sizeof (type)))
+
+static inline class temporaries
+{
+	REFPTR tmp [DLL_MAXARG];
+	int ntmp;
+    public:
+	temporaries ()				{ ntmp = 0; }
+	arrayObj *store (__object__ *o)		{ tmp [ntmp++].ctor (o); return arrayObj.cast (o); }
+	~temporaries ();
+};
+
+temporaries.~temporaries ()
+{
+	if_unlikely (ntmp) {
+		int i = ntmp;
+		while (--i)
+			tmp [i].dtor ();
+	}
+}
+
+static void *convert_parg (temporaries TMPS, __object__ *o, int type)
+{
+static	const int ARRAY_ID [] = {
+		[TYPE_PINT8] = 'c',
+		[TYPE_PINT16] = 'h',
+		[TYPE_PINT32] = 'i',
+		[TYPE_PFLOAT] = 'f',
+		[TYPE_PDOUBLE] = 'd',
+	};
+	if (arrayObj.isinstance (o)) {
+		if_unlikely (arrayObj.cast (o)->P->identifier != ARRAY_ID [type])
+			RaiseNotImplemented ("Incompatible array");
+		return arrayObj.cast (o)->P->ptr;
+	}
+	if (type == TYPE_PINT8 && StringObj.isinstance (o))
+		return StringObj.cast (o)->str;
+	return TMPS.store (list_to_array (ARRAY_ID [type], TupleObj.checkedcast (o)))->P->ptr;
+}
+
+static void dlCallableObj.call_blocking (REFPTR retval, long argz[]) noinline
+{
+	// an exception may be raised. If so, it will be raised from a 'Callback' which
+	// holds the GIL and it will be bypass the RELEASE_GIL and the end of
+	// the Callback. Meaning that we are OK as far as the GIL is concerned!
+	// (untested but it's nearly so)
+	RELEASE_GIL
+		if (A.ret_type == TYPE_DOUBLE) {
+			double ret = u.ddlfunc (argz [0],  argz [1],  argz [2],  argz [3],
+			     argz [4],  argz [5],  argz [6],  argz [7],
+			     argz [8],  argz [9],  argz [10], argz [11],
+			     argz [12], argz [13], argz [14], argz [15],
+			     argz [16], argz [17]);
+			ACQUIRE_GIL
+			retval = new FloatObj (ret);
+		} else if (A.ret_type == TYPE_FLOAT) {
+			float ret = u.fdlfunc (argz [0],  argz [1],  argz [2],  argz [3],
+			     argz [4],  argz [5],  argz [6],  argz [7],
+			     argz [8],  argz [9],  argz [10], argz [11],
+			     argz [12], argz [13], argz [14], argz [15],
+			     argz [16], argz [17]);
+			ACQUIRE_GIL
+			retval = new FloatObj (ret);
+		} else {
+			int ret = u.ldlfunc (argz [0],  argz [1],  argz [2],  argz [3],
+			     argz [4],  argz [5],  argz [6],  argz [7],
+			     argz [8],  argz [9],  argz [10], argz [11],
+			     argz [12], argz [13], argz [14], argz [15],
+			     argz [16], argz [17]);
+			ACQUIRE_GIL
+			switch (A.ret_type) {
+			case TYPE_VOID: 
+				retval.setNone ();
+			ncase TYPE_NUM:
+				retval = newIntObj (ret);
+			ncase TYPE_STRING:
+				retval = new StringObj ((char*) ret);
+			ndefault:
+				RaiseNotImplemented ("return type");
+			}
+		}
+}
+
+extern void NoDefaults (int) noreturn;
+
+void dlCallableObj.call (REFPTR retval, REFPTR argv[], int argc)
+{
+#ifdef	TRACE_DLL
+	pprint ("enter DLL:", name.o);
+#endif
+	if_unlikely (argc != A.argn)
+		NoDefaults (argc);
+
+	long argz [DLL_MAXARG];
+	void *vargz = argz;
+	temporaries TMPS;
+
+	/* Load the arguments from __object__s to the argz[] array */
+
+	char *argument_types = A.argument_types ();
+
+	for (int i = 1; i <= argc; i++)
+		switch (int y = argument_types [i-1]) {
+		case TYPE_NUM:
+			LOADVAL (int) = IntObj.fcheckedcast (argv [i].o)->i;
+		ncase TYPE_ZTRING:
+			if (argv [i].o == &None) {
+				LOADVAL (char*) = 0;
+				break;
+			}
+		case TYPE_STRING:
+			LOADVAL (char*) = StringObj.checkedcast (argv [i].o)->str;
+		ncase TYPE_FLOAT:
+			LOADVAL (float) = argv [i]->todouble ();
+		ncase TYPE_DOUBLE:
+			LOADVAL (double) = argv [i]->todouble ();
+		ncase TYPE_PTR:
+			if (arrayObj.isinstance (argv [i].o))
+				LOADVAL (void*) = arrayObj.cast (argv [i].o)->P->ptr;
+			else if (IntObj.isinstance (argv [i].o))
+				LOADVAL (void*) = (void*) argv [i].as_int->i;
+			else if (StringObj.isinstance (argv [i].o))
+				LOADVAL (void*) = argv [i].as_string->str;
+			else	RaiseNotImplemented ("PTR agument");
+		ncase TYPE_PFLOAT:
+		case TYPE_PDOUBLE:
+		case TYPE_PINT8:
+		case TYPE_PINT16:
+		case TYPE_PINT32:
+			LOADVAL (void*) = convert_parg (TMPS, argv [i].o, y);
+		ndefault:
+			RaiseNotImplemented ("DLL.call.fmt");
+		}
+
+ 	/* If we pass more arguments, it's OK
+	 * (valgrind may complain -- zero the array)
+	 */
+
+	if_unlikely (blocking)
+		call_blocking (retval, argz);
+	else if (A.ret_type == TYPE_DOUBLE) {
+		double ret;
+		if (A.rsize <= 4)
+			ret = u.ddlfunc (argz [0], argz [1], argz [2], argz [3]);
+		else if (A.rsize <= 8)
+			ret = u.ddlfunc (argz [0], argz [1], argz [2], argz [3],
+				         argz [4], argz [5], argz [6], argz [7]);
+		else ret = u.ddlfunc (argz [0],  argz [1],  argz [2],  argz [3],
+				      argz [4],  argz [5],  argz [6],  argz [7],
+				      argz [8],  argz [9],  argz [10], argz [11],
+				      argz [12], argz [13], argz [14], argz [15],
+				      argz [16], argz [17]);
+		retval = new FloatObj (ret);
+	} else if (A.ret_type == TYPE_FLOAT) {
+		float ret;
+		if (A.rsize <= 4)
+			ret = u.fdlfunc (argz [0], argz [1], argz [2], argz [3]);
+		else if (A.rsize <= 8)
+			ret = u.fdlfunc (argz [0], argz [1], argz [2], argz [3],
+				         argz [4], argz [5], argz [6], argz [7]);
+		else ret = u.fdlfunc (argz [0],  argz [1],  argz [2],  argz [3],
+				      argz [4],  argz [5],  argz [6],  argz [7],
+				      argz [8],  argz [9],  argz [10], argz [11],
+				      argz [12], argz [13], argz [14], argz [15],
+				      argz [16], argz [17]);
+		retval = new FloatObj (ret);
+	} else {
+		long ret;
+		if_likely (A.rsize <= 4)
+			ret = u.ldlfunc (argz [0], argz [1], argz [2], argz [3]);
+		else if (A.rsize <= 8)
+			ret = u.ldlfunc (argz [0], argz [1], argz [2], argz [3],
+				         argz [4], argz [5], argz [6], argz [7]);
+		else ret = u.ldlfunc (argz [0],  argz [1],  argz [2],  argz [3],	
+				      argz [4],  argz [5],  argz [6],  argz [7],
+				      argz [8],  argz [9],  argz [10], argz [11],
+				      argz [12], argz [13], argz [14], argz [15],
+				      argz [16], argz [17]);
+
+		/* convert return value from C to python */
+
+		switch (A.ret_type) {
+			case TYPE_VOID: 
+				retval.setNone ();
+			ncase TYPE_NUM:
+				retval = newIntObj (ret);
+			ncase TYPE_STRING:
+				retval = new StringObj ((char*) ret);
+			ndefault:
+				RaiseNotImplemented ("return type");
+		}
+	}
+#ifdef	TRACE_DLL
+	pprint ("leave DLL:", name.o);
+#endif
+}
+
+/* ****************** callbacks **************** */
+
+/* XXXX: right now it's only safe that callbacks will
+ * return 'None', 'int', 'double', 'float'. For anything
+ * else we should reference-count the python object.
+ * Right now, returning a string will probably SEGFAULT
+ */
+
+/*
+ * Call back into pyvm.
+ *
+ * We can't pass (callable) python objects to C, because
+ * 	1) it doesn't have reference counting
+ *	2) it doesn't always have an argument void* for it
+ *
+ * Therefore we do this with a 'token' which is a simple
+ * integer.  The python callable objects are found in a list
+ * which is accessed with the token.
+ */
+
+/*
+ * include once as static. provides 32 callbacks.
+ * for more, copy the binary dump of libcallback.so
+ * to temporary, dlopen it and get 32 extra callbacks.
+ */
+#include "libcallback.c"
+
+static ListObj cb_tokens __noinit ();
+
+static DictObj cbMethods __noinit ();
+static const char cbType [] = "C Callback";
+static TypeObj cbTypeObj;
+
+static class cbObj : __container__
+{
+	const char *const stype = cbType;
+	const TypeObj &type = &cbTypeObj;
+	DictObj *type_methods = &cbMethods;
+
+	bool has_va;
+	REFPTR callable;
+	void *fptr;
+
+	argspecs A;
+
+   public:
+	cbObj (argspecs);
+
+	void set_callable (__object__*);
+	long do_call (long, long, long, long, long, long);
+
+	void print ();
+	void traverse ();
+	void __release ();
+};
+
+static TypeObj cbTypeObj ctor (cbObj._v_p_t_r_);
+
+cbObj.cbObj (argspecs _A)
+{
+	callable.ctor ();
+	__container__.ctor ();
+
+	A = _A;
+	_A.argn = 0;
+
+	fptr = new_callback (cb_tokens.len);
+	cb_tokens.append ((__object__*) this);
+}
+
+void cbObj.set_callable (__object__ *o)
+{
+	has_va = PyFuncObj.isinstance (o) && PyFuncObj.cast (o)->has_va;
+	callable = o;
+}
+
+void cbObj.__release ()
+{
+	// should put on a free list for reuse
+	// just don't delete for now...
+	callable.setNone ();
+}
+
+void cbObj.traverse ()
+{
+	callable.traverse_ref ();
+}
+
+void cbObj.print ()
+{
+	print_out ("<C Callable>");
+}
+
+long cbObj.do_call (long a, long b, long c, long d, long e, long f)
+{
+	long valz [] = { a, b, c, d, e, f };
+	void *v = valz;
+	REFPTR argv [A.argn];
+	REFPTR ret;
+	char *argument_types = A.argument_types ();
+
+	for (int i = 0; i < A.argn; i++)
+		switch (argument_types [i]) {
+		case TYPE_NUM:
+			argv [i].ctor (newIntObj (*(int*) postfix (v, v += sizeof (int))));
+		ndefault: RaiseNotImplemented ("Callback type");
+		}
+
+	callable->call (ret, argv-1, A.argn);
+	if (ret.o == &CtxSw)
+		ret.ctor (preempt_pyvm (CtxSw.vm));
+	for (int i = 0; i < A.argn; i++)
+		argv [i].dtor ();
+
+	if (A.ret_type == TYPE_VOID || ret.o == &None)
+		return 0;
+
+	if (BoolObj.isinstance (ret.o))
+		return ret.o == &TrueObj;
+
+	return ret.as_int->i;
+}
+
+/* ****************** callback handler **************** */
+
+/*
+ * All callbacks call this function to enter pyvm.
+ * The first argument is the 'token' from which we
+ * find the real callable.
+ */
+
+
+static long pyvm_callback_handler (long token, long a, long b, long c, long d, long e, long f)
+{
+	long ret;
+#ifdef	TRACE_DLL
+	pprint (">>> enter Callback", token);
+#endif
+	if (!am_GIL_owner ()) {
+		/* We have to get a context and use different macros */
+		pprint ("CANNOT CALLBACK. NOT GIL OWNER");
+		ret = 0;
+	} else {
+		cbObj *C = cbObj.cast (cb_tokens.__xgetitem__ (token));
+		ret = C->do_call (a, b, c, d, e, f);
+	}
+#ifdef	TRACE_DLL
+	pprint (">>> leave Callback", token);
+#endif
+	return ret;
+}
+
+/* ****************** module interface **************** */
+
+slow static __object__ *get_dllObj (REFPTR argv[], int argc)
+{
+	dllObj *D = dllObj.cast (argv [0].o);
+	if (!TupleObj.typecheck (argv [1].o) || argv [1].as_tuple->len != 3)
+		RaiseNotImplemented ("SyntaxError on dll.get fmt (1)");
+
+	TupleObj *T = TupleObj.cast (argv [1].o);
+	void *hook = D->getsym (StringObj.checkedcast (T->__xgetitem__ (1))->str);
+	{
+		argspecs A ((StringObj*) StringObj.checkedcast (T->__xgetitem__ (0)),
+			    StringObj.checkedcast (T->__xgetitem__ (2)));
+
+		return new dlCallableObj (D, hook, A, T->__xgetitem__ (1), argc==3 && argv [2]->Bool());
+	}
+}
+
+slow static __object__ *sym_dllObj (REFPTR argv[])
+{
+	dllObj *D = dllObj.cast (argv [0].o);
+	StringObj *S = argv [1].check_string ();
+	void *p = D->getsym (S->str);
+	if (!p) RaiseNotImplemented ("No such symbol in dll");
+	return newIntObj ((int)p);
+}
+
+static __object__ *set_callback_cbObj (REFPTR argv[])
+{
+	cbObj.cast (argv [0].o)->set_callable (argv [1].o);
+	return &None;
+}
+
+static __object__ *fptr_cbObj (REFPTR argv[])
+{
+	return new IntObj ((int) cbObj.cast (argv [0].o)->fptr);
+}
+
+static __object__ *dllopen_JIT (REFPTR argv[])
+{
+	dllObj *D = new dllObj;
+	REFPTR dl = D;
+
+	D->do_load (StringObj.checkedcast (argv [0].o)->str);
+
+	return dl.Dpreserve ();
+}
+
+static __object__ *Callback_JIT (REFPTR argv[])
+{
+	if (!TupleObj.typecheck (argv [0].o) || argv [0].as_tuple->len != 2)
+		RaiseNotImplemented ("SyntaxError on Callback() fmt (1)");
+
+	TupleObj *T = TupleObj.cast (argv [0].o);
+	{
+		argspecs A ((StringObj*) StringObj.checkedcast (T->__xgetitem__ (0)),
+			    StringObj.checkedcast (T->__xgetitem__ (1)));
+
+		return new cbObj (A);
+	}
+}
+
+/* utilities */
+
+_module __object__ *CStringToPyString (REFPTR argv[])
+{
+	return new StringObj ((char*) argv [0].check_int ()->i);
+}
+
+_module __object__ *Memcpy (REFPTR argv[])
+{
+	/* Memcpy (ptr, n) -> string with n bytes from ptr */
+	void *ptr = (void*) argv [0].check_int ()->i;
+	return new StringObj binctor (ptr, argv [1].check_int ()->i);
+}
+
+_module __object__ *MemcpyInts (REFPTR argv[])
+{
+	arrayObj *A = arrayObj.checkedcast (argv [0].o);
+	if_unlikely (A->P->identifier != 'i')
+		RaiseNotImplemented ("MemcpyInts: need array ('i')");
+	if_unlikely (A->P->n < argv [2].check_int ()->i)
+		RaiseNotImplemented ("MemcpyInts: not big enough");
+	memcpy (A->P->ptr, (void*) argv [1].check_int ()->i, argv [2].as_int->i * sizeof (void*));
+	return argv [0].o;
+}
+
+_module __object__ *StructMember (REFPTR argv[])
+{
+	return newIntObj (*(int*)((void*)argv [0].check_int ()->i + argv [1].check_int ()->i));
+}
+
+/* fptr_wrapper (retval, name, argspecs, blocking=False, ref=None)
+ *
+ * Create a callable from an integer which is the address of
+ * a C function, obtained by some hackish way. Not to be used
+ * by simple users. `ref` is an object which is just referenced and
+ * will live as long as the callable exists.
+ */
+_module __object__ *fptr_wrapper (REFPTR argv[], int argc)
+{
+	void *hook = (void*) argv [1].check_int ()->i;
+	argspecs A (argv [0].check_string (), argv [2].check_string ());
+	__object__ *ref = argc == 5 ? argv [4].o : &None;
+	return new dlCallableObj (ref, hook, A, &None, argc==4 && argv [3]->Bool());
+
+}
+
+/* module */
+
+static bltinfunc funcs [] = {
+	{ "dllopen",		SETARGC (1, 1), dllopen_JIT, 0 },
+	{ "Callback",		SETARGC (1, 1), Callback_JIT, 0 },
+	{ "fptr_wrapper",	SETARGC (3, 5), fptr_wrapper, 0 },
+	{ "CStringToPyString",	SETARGC (1, 1), CStringToPyString, 0 },
+	{ "Memcpy",		SETARGC (2, 2), Memcpy, 0 },
+	{ "MemcpyInts",		SETARGC (3, 3), MemcpyInts, 0 },
+	{ "StructMember",	SETARGC (2, 2), StructMember, 0 },
+	BSENTINEL
+};
+
+slowcold __object__ *import__JIT ()
+{
+	return new ModuleObj BltinModule ("DLL", funcs);
+}
+
+////////////////////////// init ///////////////////////////
+
+static const method_attribute dll_methods [] = {
+	{"get",		"dll.get", SETARGC (2, 3), get_dllObj},
+	{"sym",		"dll.sym", SETARGC (2, 2), sym_dllObj},
+	MSENTINEL
+};
+
+static const method_attribute cb_methods [] = {
+	{"fptr",	"Callback.fptr", SETARGC (1, 1), fptr_cbObj},
+	{"set_callback","Callback.set_callback", SETARGC (2, 2), set_callback_cbObj},
+	MSENTINEL
+};
+
+static class InitDll : InitObj {
+	int priority = INIT_ATTR;
+	void todo ()
+	{
+		cb_tokens.__sizector (32);
+		cb_tokens.GC_ROOT ();
+		cb_tokens.inf ();
+		init_callbacks (pyvm_callback_handler);
+		dllMethods.ctor (dll_methods);
+		cbMethods.ctor (cb_methods);
+	}
+};

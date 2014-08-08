@@ -1,0 +1,6 @@
+Run
+
+	pyvm site.py 9000
+
+After that, a file `to_the_wiki.html` should appear.
+Open this file with a web browser and enter the wiki!

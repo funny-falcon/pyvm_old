@@ -1,0 +1,392 @@
+/*
+ * General purpose polling multiplexer and event notifier.
+ *
+ * This is a user space event notifier based on poll().
+ * What we achieve with this library is to pass multiple
+ * blocking calls to *one* handler thread which will use
+ * callbacks to notify the rest of the program when there
+ * is activity.
+ *
+ * The library has two entry points:
+ *
+ *	int Request (int token, int fd, int timeout, int writting)
+ *		request polling on file descriptor fd.
+ *		'timeout' is milliseconds (negative == no timeout)
+ *		'writting' boolean to test for POLLOUT or POLLIN
+ *		'fd' if -1 this is just a timer
+ *		This function is not thread safe.
+ *
+ *	void (*Notify) (int token, int timedout)
+ *		when an event occurs the library will call
+ *		the Notify callback with the token of the client.
+ *		timedout=1 if the client's timer expired.
+ *		the Notify callback is thread safe (the lib won't
+ *		re-enter)
+ *
+ *	void setNotify (void (*f)(int, int))
+ *		initializer to set the callback.
+ *
+ * The library creates new threads to handle polling.
+ * Initially no threads are created until the first Request.
+ * Each thread can handle 127 events (NCLIENTS-1).
+ */
+
+#define NCLIENTS 128
+#define MAX_POLLERS 256
+
+extern "stdio.h" { }
+extern "sys/time.h" { }
+extern "unistd.h" { }
+extern "pthread.h" { }
+extern "semaphore.h" { }
+extern "sys/poll.h" {
+#include <sys/poll.h>
+#include <sys/time.h>
+#include <limits.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <pthread.h>
+#include <semaphore.h>
+}
+#include "mallok.h"
+
+struct poll_client
+{
+	int token, fd;
+	short events;
+	timeval timeout;
+};
+
+//
+// class semaphore
+//
+
+static
+class sem
+{
+	sem_t s;
+    public:
+	sem (int i = 0)	{ sem_init (&s, 0, i); }
+	void post ()	{ sem_post (&s); }
+	void wait ()	{ sem_wait (&s); }
+};
+
+//
+// convenient member functions to struct timeval
+//
+
+static inline bool timeval.before (timeval T)
+{
+	return tv_sec < T.tv_sec || (tv_sec == T.tv_sec && tv_usec <= T.tv_usec);
+}
+
+static inline int timeval.ms_ahead_of (timeval T)
+{
+	return 1000 * (tv_sec - T.tv_sec) + (tv_usec - T.tv_usec) / 1000;
+}
+
+static inline bool timeval.sametime (timeval T)
+{
+	return tv_sec == T.tv_sec && tv_usec == T.tv_usec;
+}
+
+static inline void timeval.now ()
+{
+	gettimeofday (this, 0);
+}
+
+static inline void timeval.never ()
+{
+	tv_sec = LONG_MAX;
+	tv_usec = 0;
+}
+
+static inline void timeval.add_ms (int ms)
+{
+	tv_sec += ms / 1000;
+	ms %= 1000;
+	tv_usec += ms * 1000;
+	if (tv_usec > 1000000) {
+		tv_sec += tv_usec / 1000000;
+		tv_usec %= 1000000;
+	}
+}
+
+//
+// poller class.
+// Because the only way to search for poll events is O(n)
+// a single poller thread would be inefficient for too many
+// threads.
+// For that we spawn 'poller classes' which divide the event
+// array. Each poller class can handle up to 127 events.
+//
+
+static
+class poller
+{
+	sem plock;
+
+	int nclients;
+	poll_client client [NCLIENTS];
+
+	pollfd active [NCLIENTS];
+	int nactive;
+	int min_timeout;
+	timeval min_timeval;
+
+	int ctrl_w, ctrl_r;
+
+	void fill_active ();
+	void notify (int, bool);
+	void notify_min_timevals ();
+	void notify_fd (int);
+	void ctrl ();
+	void main_loop ();
+    public:
+	poller ();
+	void request (int, int, int, int);
+	bool can_serve ();
+};
+
+void poller.notify (int i, bool timedout)
+{
+	int token = client [i].token;
+
+	client [i].token = -1;
+	--nclients;
+	_Notify (token, timedout);
+}
+
+void poller.fill_active ()
+{
+	int i;
+	timeval mintime never ();
+
+	nactive = 0;
+	for (i = 0; i < NCLIENTS; i++)
+		if (client [i].token != -1) {
+			if (client [i].timeout.before (mintime))
+				mintime = client [i].timeout;
+			if (client [i].fd != -1) {
+				active [nactive].fd = client [i].fd;
+				active [nactive].events = client [i].events;
+				active [nactive++].revents = 0;
+			}
+		}
+
+	if (mintime.tv_sec != LONG_MAX) {
+		timeval now now ();
+		min_timeout = mintime.ms_ahead_of (now);
+		min_timeval = mintime;
+		if (min_timeout <= 0) {
+			notify_min_timevals ();
+			return fill_active ();
+		}
+	} else
+		min_timeout = -1;
+}
+
+void poller.notify_min_timevals ()
+{
+	for (int i = 0; i < NCLIENTS; i++)
+		if (client [i].token != -1
+		 && client [i].timeout.sametime (min_timeval))
+			notify (i, true);
+}
+
+void poller.notify_fd (int fd)
+{
+	for (int i = 0; i < NCLIENTS; i++)
+		if (client [i].token != -1 && client [i].fd == fd) {
+			notify (i, false);
+			return;
+		}
+}
+
+void poller.main_loop ()
+{
+	int n;
+
+	for (;;) {
+		fill_active ();
+		plock.post ();
+		n = poll (active, nactive, min_timeout);
+		plock.wait ();
+
+		if (n == 0)
+			notify_min_timevals ();
+		else if (n > 0) {
+			if (active [0].revents)
+				ctrl ();
+			else for (int i = 1; i < nactive; i++)
+				if (active [i].revents)
+					notify_fd (active [i].fd);
+		} else {
+			fprintf (stderr, "poll error %i\n", n);
+			perror ("INFO:");
+		}
+	}
+}
+
+struct marshal_request
+{
+	int token, fd, timeout, writting;
+};
+
+void poller.ctrl ()
+{
+	int i;
+	marshal_request M;
+
+	read (ctrl_r, &M, sizeof M);
+	for (i = 0; client [i].token != -1; i++)
+		;
+	client [i].token = M.token;
+	client [i].events = (M.writting ? POLLOUT : (POLLIN | POLLPRI)) | POLLHUP | POLLERR;
+	client [i].fd = M.fd;
+	if (M.timeout < 0)
+		client [i].timeout.never ();
+	else {
+		client [i].timeout.now ();
+		client [i].timeout.add_ms (M.timeout);
+	}
+}
+
+static void *_enter_main_loop (void *t)
+{
+	poller *p = (poller*) t;
+	p->main_loop ();
+	return 0;
+}
+
+poller.poller ()
+{
+	int ctrl_fd [2];
+
+	plock.ctor ();
+	pipe (ctrl_fd);
+	ctrl_w = ctrl_fd [1];
+	client [0].fd = ctrl_r = ctrl_fd [0];
+	client [0].token = 0;
+	client [0].timeout.never ();
+	client [0].events = POLLIN;
+	nclients = 1;
+	for (int i = 1; i < NCLIENTS; i++)
+		client [i].token = -1;
+
+	// spawn new thread and wait until in working state
+	pthread_t T;
+	pthread_attr_t A;
+	pthread_attr_init (&A);
+	pthread_attr_setdetachstate (&A, PTHREAD_CREATE_DETACHED);
+	pthread_create (&T, &A, _enter_main_loop, this);
+	plock.wait ();
+	plock.post ();
+}
+
+void poller.request (int token, int fd, int timeout, int writting)
+{
+	marshal_request M = { token, fd, timeout, writting };
+	++nclients;
+	write (ctrl_w, &M, sizeof M);
+}
+
+bool poller.can_serve ()
+{
+	return nclients < NCLIENTS;
+}
+
+//
+// poll domain.
+// A pool of poller classes. Maximum events the library
+// can handle is 256*127 (should be enough for everybody)
+//
+
+static
+class poller_domain
+{
+	poller *P [MAX_POLLERS];
+	int nP;
+    public:
+	poller_domain ();
+	void request (int, int, int, int);
+};
+
+poller_domain.poller_domain ()
+{
+	nP = 0;
+}
+
+void poller_domain.request (int token, int fd, int timeout, int writting)
+{
+	poller *p = 0;
+
+	for (int i = 0; i < nP; i++)
+		if (P [i]->can_serve ()) {
+			p = P [i];
+			break;
+		}
+
+	if (!p) p = P [nP++] = new poller;
+
+	p->request (token, fd, timeout, writting);
+}
+
+static poller_domain PollerControlCenter;
+
+////////////////////////////////////////////////////////////////////
+
+static sem Nlock (1);
+static void (*Notify) (int, int);
+
+static void _Notify (int token, int fd)
+{
+	Nlock.wait ();
+	Notify (token, fd);
+	Nlock.post ();
+}
+
+void setNotify (void (*f)(int, int))
+{
+	Notify = f;
+}
+
+int Request (int token, int fd, int timeout, int writting)
+{
+	if (token == -1 || (fd == -1 && timeout < 0))
+		return -1;
+	PollerControlCenter.request (token, fd, timeout, writting);
+	return 0;
+}
+
+///////////////// testing ************************
+
+#if 0
+void testNotify (int token, bool timedout)
+{
+	printf ("TOKEN: %i %i\n", token, timedout);
+}
+
+int main ()
+{
+	setNotify (testNotify);
+
+	/* wait for 2 secs, token '11' */
+	Request (11, -1, 2000);
+	sleep (1);
+
+	/* wait on stdin (press enter) for no more than 2 secs, token '13' */
+	Request (13, fileno (stdin), 2000);
+	sleep (3);
+
+	/* lots of timers */
+	printf ("Will do some lots:\n");
+	for (int i = 0; i < 300; i++)
+		Request (i, -1, 4000+i*10);
+	printf ("should start RSN...\n");
+	sleep (7);
+	for (int i = 0; i < 20; i++)
+		Request (i+1000, -1, 1000+i);
+	sleep (4);
+}
+#endif

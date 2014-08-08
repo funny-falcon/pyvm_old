@@ -1,0 +1,157 @@
+
+				``Not fare well,
+				But fare forward''
+
+LWC
+===
+
+pyvm is written in the lightweight C++ language (lwc). lwc is rather
+obvious and looks very much like C++, so no docs-reading is necessary
+for simple hacking; just imitate other parts of the code.
+
+However, be warned. The lwc preprocessor has a couple of annoying bugs.
+If you add code and you get:
+
+	- weird lwc errors, or
+	- gcc errors from the generated C,
+
+don't waste your time trying to figure out what you've done wrong!
+It's very possible that you did nothing wrong, just the lwc preprocessor
+is broken. Ask on pyc-list right away.
+
+One known problem for example is that 'return' in try-else may
+possibly generate bad code and segfault the vm.
+
+Generally, unused lwc freatures tend to get buggy and marked for
+deprecation; ask in order to know that to avoid.
+
+
+pyvm
+====
+
+pyvm has a very powerful printing function which
+is very close to python's 'print' and can print strings, numbers
+and python objects. It's called pprint and it will also insert
+spaces between its arguments and append a newline at the end,
+
+So at any point you can say
+
+	pprint ("This is object", o);
+
+To see the object 'o' which can be a list, dictionary, class...
+
+
+tracing
+=======
+
+The most important thing in the case of segmentation faults
+or weirdness is to try to create a reduced testcase.
+
+pyvm has some tracing facilities which you can turn on with
+ifdefs. These are
+
+1) at pymodules.h.c+, near the start there is a macro
+
+	TRACE_BUILTIN
+
+   This will print a message each time the vm enters and
+   leaves a builtin function. Useful to know where you are.
+
+2) at module.JIT.c+ the macro,
+
+	TRACE_DLL
+
+   This will print messages each time a DLL'd function is
+   called. Useful mostly when working with DLLs.
+
+3) Main interpreter tracing, in pyvm.h.c+ there is
+
+	SIMPLE_TRACE
+
+   This will print each py-function call, return, generator
+   yield and exception raise. The data is useful to know
+   where you are in bytecode but some times the output
+   is toooo much and therefore not useful. You can toggle
+   the global DebugVM (module.__builtin__) and turn it on
+   from python with debug_on().
+
+Finally, in VMPARAMS.h you can disable DIRECT_THREADING
+and enable TRACEVM. This is guaranteed to produce gigabytes
+of output and should only be used on reduced testcases if
+you think there is something wrong with the core interpreter
+loop/stack/etc.
+
+* At any time you can call whereami() to print a traceback on
+  stdout. Available both in C and in python as a builtin.
+
+* Tracebacks. ATM pyvm cannot generate tracebacks because vm contexts
+  are not (refcounted) objects and consequently they are erased when
+  functions return.  Near the start of pyvm.h.c+ there is the macro
+
+	TRACEBACK_LEVEL 1
+
+  If set to '2' it will force the vm to generate a full traceback each
+  time an exception is raised. (very slow)
+
+* Some parts of pyvm need serious refactoring. patches welcome.
+  patches that improve the tracing/debugging facilities are very
+  welcome too.
+
+* Some times a simple 'grep' may be the best way to figure out what's
+  happening.
+
+
+valgrind
+========
+
+First to use valgrind you'd better edit the Makefile and
+un-comment the line
+
+	#CFL = -c -Wall -g -O0
+
+and then 'make clean; make'. This will enable debugging info
+and also ensure that valgrind will report precise results.
+
+It's possible that you'll get a compilation error:
+	"Not enough room for program headers"
+This is brokeness of the linker and I haven't managed to
+get more information about what it means. A workaround is
+to start adding '-O1' or '-Os' for some targets in the
+Makefile. It seems that reducing the size of the binary
+can make the error go away. (BTW, this is why there are
+some '-Os's left in the Makefile).
+
+pyvm's segmented allocator, like python's allocator, accesses
+unititialized memory. To suppress these warnings put
+
+	{
+	   pyvm/seg_malloc
+	   Memcheck:Cond
+	   fun:seg_realloc
+	}
+	{
+	   pyvm/seg_malloc
+	   Memcheck:Value4
+	   fun:seg_realloc
+	}
+	{
+	   pyvm/seg_malloc
+	   Memcheck:Cond
+	   fun:seg_free_OvErlOaD_Pv1
+	}
+	{
+	   pyvm/seg_malloc
+	   Memcheck:Value4
+	   fun:seg_free_OvErlOaD_Pv1
+	}
+
+in /usr/lib/valgrind/default.supp
+
+valgrind and gdb will report errors in the *generated* C files
+at cdir.
+
+Ask!
+====
+
+Either on <http://www.freelists.org/lists/pyc> (subscription required)
+or directly <sxanth@cs.teiath.gr> or <sxanth@ceid.upatras.gr>

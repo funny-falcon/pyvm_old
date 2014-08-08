@@ -1,0 +1,148 @@
+extern "stdio.h" {
+#include <sys/stat.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
+#include <sched.h>
+#include <fcntl.h>
+#include <sys/select.h>
+#include <sys/mman.h>
+}
+extern "sys/stat.h" { }
+extern "unistd.h" { }
+extern "errno.h" { }
+extern "string.h" { }
+extern "sched.h" { }
+extern "fcntl.h" { }
+extern "sys/select.h" { }
+extern "sys/mman.h" { }
+
+/* memfs */
+int memfs_open_r (const char*, char**, int*);
+int memfs_open_w (const char*, int);
+int memfs_write (int, const void*, int);
+int memfs_read (int, void*, int);
+void memfs_close (int);
+int memfs_access (const char*, int);
+static inline bool memfs_url (const char *s)
+{
+	return strncmp ("memfs://", s, 8) == 0;
+}
+
+#include "filedes.h"
+#define USE_MMAP
+
+static inline int puremode (int mode)
+{
+	return mode & (O_RDONLY|O_WRONLY|O_RDWR);
+}
+
+filedes.filedes (const char *fnm, int mode, bool nonblock, bool dommap)
+{
+	type = FD_BAD;
+	blocked = false;
+	if ((memfsd = memfs_url (fnm))) {
+		if (mode == $O_RDONLY) {
+			fd = memfs_open_r (fnm + 7, &mm_start, &len);
+			if (fd != -1)
+				type = FD_READ_MMAP;
+		} else if (puremode (mode) == $O_WRONLY) {
+			fd = memfs_open_w (fnm + 7, mode);
+			if (fd != -1)
+				type = FD_WRITE;
+		}
+		return;
+	}
+
+	fd = open (fnm, mode, 0666);
+	if (fd == -1)
+		return;
+
+	if (mode == $O_RDONLY && dommap) {
+		stat statbuf;
+		if (fstat (fd, &statbuf) != -1 && S_ISREG (statbuf.st_mode)
+		    && (len = statbuf.st_size) != -1) {
+			mm_start = (char*) mmap (0, len, $PROT_READ, $MAP_PRIVATE, fd, 0);
+			if (mm_start) {
+#ifdef	MADV_SEQUENTIAL
+				madvise (mm_start, len, $MADV_SEQUENTIAL);
+#endif
+				type = FD_READ_MMAP;
+				return;
+			}
+		}
+	}
+	ctor (fd, mode, nonblock);
+}
+
+filedes.filedes (int _fd, int _mode, bool nonblock)
+{
+	blocked = false;
+	memfsd = 0;
+	fd = _fd;
+	if (nonblock)
+		fcntl (fd, F_SETFL, fcntl (fd, F_GETFL) | $O_NONBLOCK);
+	switch (puremode (_mode)) {
+		case $O_RDONLY: type = FD_READ; break;
+		case $O_WRONLY: type = FD_WRITE; break;
+		default: type = FD_RW;
+	}
+}
+
+filedes.~filedes ()
+{
+	if (type == FD_BAD) return;
+	if (memfsd) memfs_close (fd);
+	else {
+		if (type == FD_READ_MMAP)
+			munmap (mm_start, len);
+		close (fd);
+	}
+	type = FD_BAD;
+}
+
+unsigned int filedes.read (void *buf, unsigned int count)
+{
+	if (memfsd)
+		return memfs_read (fd, buf, count);
+	unsigned int nr = read (fd, buf, count);
+	if (nr == -1)
+		blocked = errno == EAGAIN;
+	return nr;
+}
+
+unsigned int filedes.write (const void *buf, unsigned int count)
+{
+	if (memfsd)
+		return memfs_write (fd, buf, count);
+	unsigned int nr = write (fd, buf, count);
+	if (nr == -1)
+		blocked = errno == EAGAIN;
+	return nr;
+}
+
+void filedes.wait_to_write ()
+{
+	int fd = fd;
+	fd_set set;
+	FD_ZERO(&set);
+	FD_SET(fd, &set);
+	select (fd + 1, 0, &set, 0, 0);
+}
+
+void filedes.wait_to_read ()
+{
+	int fd = fd;
+	fd_set set;
+	FD_ZERO(&set);
+	FD_SET(fd, &set);
+	select (fd + 1, &set, 0, 0, 0);
+}
+
+//************** file utils wrapping ************
+
+int fs_access (const char *path, int mode)
+{
+	return !memfs_url (path) ? access (path, mode) : memfs_access (path + 7, mode);
+}

@@ -1,0 +1,32 @@
+# regexp to C
+from _rejit import re2c;
+
+# for compiling and linking C code.
+import DLL;
+
+# hack. we export a builtin constructor of regular expression
+# objects which can be initialized with pointers to functions.
+# specifically for rejit and nothing else outside this.
+from _re import __regobj__;
+
+def jwrap (lib)
+	return __regobj__ (lib, lib.get (('i', 'ngroup', '')) (),
+		 lib.sym ('match'),
+		 lib.sym ('search'));
+
+N=0;
+
+def compile (s, f)
+	try {
+		# xxxx: Cache regexes so we'll avoid regenerating C
+		c = re2c (s, f);
+
+		if (0)
+			 open ('last_re_%i.c'% (N+=1), 'w').write (c);
+
+		lib = DLL.CachedLib ("RE%x"%hash (s), c, ['-O3'], dll=1);
+		return jwrap (lib);
+	} except () {
+		print "UNABLE TO JIT:", s, sys.exc_info ();
+		return None;
+	}

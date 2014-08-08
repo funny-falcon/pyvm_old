@@ -1,0 +1,58 @@
+
+#include "dynlib.h"
+
+/* from MT 19937 AR */
+void init_genrand(unsigned long);
+void init_by_array(long[], int);
+unsigned long genrand_int32(void);
+double genrand_res53(void);
+
+_module __object__ *randObj_seed (REFPTR argv [], int argc)
+{
+	/* We'll try to have the *same* seed as python gives to its
+	 * mt19937ar algorithm and therefore theoretically, python and
+	 * pyvm, given the same seed will generate the same sequence of
+	 * random numbers.  That's good for benchmarks.
+	 */
+	if_unlikely (argc != 2 || !IntObj.isinstance (argv [1].o))
+		RaiseNotImplemented ("seed(integer only plz)");
+	init_by_array (&argv [1].as_int->i, 1);
+	return &None;
+}
+
+_module __object__ *randObj_random (REFPTR[])
+{
+	return new FloatObj (genrand_res53 ());
+}
+
+_module __object__ *randObj_getrandbits (REFPTR argv [])
+{
+	int n = IntObj.isinstance (argv [1].o) ? argv [1].as_int->i :
+		 (int) FloatObj.fcheckedcast (argv [1].o)->f;
+	if_unlikely (n <= 0 || n > 32) RaiseNotImplemented ("get*many*randbits");
+	return newIntObj (genrand_int32 () & ((n << 1) - 1));
+}
+
+/* module */
+
+slowcold __object__ *import__random ()
+{
+	ModuleObj *tm = new ModuleObj BltinModule ("_random");
+	tm->GC_ROOT ();
+
+	init_genrand (time (0) ^ (_random_ ^ getpid()) * (long) tm * vmTicks);
+
+	DictObj *D = new DictObj;
+	__object__ *xx = extendFunc2 ("_random.seed", 1, 2, randObj_seed);
+	D->AddItems (
+		("seed", xx), ("setstate", xx), ("getstate", xx), ("jumpahead", xx),
+		("random", extendFunc ("random", 1, randObj_random)),
+		("getrandbits", extendFunc ("getrandbits", 2, randObj_getrandbits))
+	);
+	D->xsetitem (Interns.__module__, new_interned ("_random"));
+
+	StringObj *N = INTERNED ('Random');
+	tm->setattr (N, new DynClassObj (D, NILTuple, 'RAnDoMZOON'));
+	tm->setattr (Interns.__module__, new_interned ("_random"));
+	return tm;
+}

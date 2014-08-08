@@ -1,0 +1,25 @@
+About this wiki
+---------------
+
+This is a very simplistic wiki engine which is based
+on:
+
+*  Python (pyvm runtime, [stats](/special/stats.html))
+*  BaseHTTPServer -- everything in memory
+*  the [web.py](http://webpy.org) micro-framework (modified)
+*  Markdown (add link) typesetting
+*  the rediculously simple, [parawiki](/special/site.py) engine
+
+How does it work
+----------------
+
+Anybody can *edit* the *cache*. Those who know the password can
+*commit* the cache to *head*. If you submit modifications but in
+the meanwhile the page has been modified, your modifications will
+be **lost** ("first to commit wins").
+
+Another interesting approach is the concept of the *distributed wiki*.
+That is that you start your own wiki server (the *local* wiki)
+and then edit this wiki (*remote* wiki) just to link to the content
+of *your* wiki. And then others edit your wiki to add links to
+*their* wiki, etc, etc... On the other hand this may never happen!

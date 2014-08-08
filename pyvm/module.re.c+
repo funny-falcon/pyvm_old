@@ -1,0 +1,438 @@
+extern "sys/time.h" {
+#include <sys/time.h>
+}
+extern "math.h" {
+#include <math.h>
+}
+
+#include "pcre/pcre.h"
+#include "dynlib.h"
+
+#define PY_IGNORECASE 2
+#define PY_MULTILINE 8
+#define PY_DOTALL 16
+#define PY_VERBOSE 64
+
+typedef int (*matchfunc) (const char*, int, int, int*);
+
+/* Regex Object */
+
+static DictObj RegexMethods __noinit ();
+static const char RegexType [] = "regex";
+static TypeObj RegexTypeObj;
+
+static class RegexObj : __destructible__
+{
+	const char *const stype = RegexType;
+	const TypeObj &type = &RegexTypeObj;
+	DictObj *type_methods = &RegexMethods;
+
+	pcre *R;
+	//
+	REFPTR O;
+	matchfunc Match;
+	matchfunc Search;
+
+	bool ok;
+	int nsub;
+   public:
+	RegexObj (const char*, int);
+	void _extlib_ (__object__*, int, int, int);
+	void print ();
+	~RegexObj ();
+};
+
+static TypeObj RegexTypeObj ctor (RegexObj._v_p_t_r_);
+
+RegexObj.RegexObj (const char *c, int f)
+{
+	O.ctor ();
+	ok = 0;
+	int flags = 0;
+	if (f & PY_DOTALL)
+		flags |= PCRE_DOTALL;
+	if (f & PY_IGNORECASE)
+		flags |= PCRE_CASELESS;
+	if (f & PY_MULTILINE)
+		flags |= PCRE_MULTILINE;
+	const char *error;
+	int errf;
+	if ((R = pcre_compile (c, flags, &error, &errf, 0))) {
+		ok = 1;
+		pcre_fullinfo (R, 0, PCRE_INFO_CAPTURECOUNT, &nsub);
+		++nsub;
+	}
+//	else {
+//		pprint ("ERROR:", c, error);
+//	}
+}
+
+void RegexObj._extlib_ (__object__ *L, int n, int m, int s)
+{
+	ok = 0;
+	nsub = n;
+	O.ctor (L);
+	Match = (matchfunc) m;
+	Search = (matchfunc) s;
+}
+
+static bool RegexObj.__search (StringObj *s, int start, int endpos, int flags, int *matches)
+{
+	if (ok == 1) {
+		if (pcre_exec (R, 0, s->str, endpos, start, flags, matches, nsub*3) < 0)
+			return false;
+	} else {
+		/* Custom JITTed regex */
+		if (flags & PCRE_ANCHORED) {
+			if (!this->Match (s->str, start, endpos, matches))
+				return false;
+		} else {
+			if (!this->Search (s->str, start, endpos, matches))
+				return false;
+		}
+	}
+
+	return true;
+}
+
+static __object__ *RegexObj.search (StringObj *s, int start, int endpos, int flags)
+{
+	int matches [3*nsub];
+	if (!__search (s, start, endpos, flags, matches))
+		return &None;
+	return new RegmatchObj (s, (regmatch_t*) matches, nsub, this);
+}
+
+void RegexObj.print ()
+{
+	print_out ("regex object at :", (void*)this);
+}
+
+RegexObj.~RegexObj ()
+{
+	if (ok)
+		__free (R);
+}
+
+static __object__ *search_RegexObj (REFPTR argv[], int argc)
+{
+	StringObj *subject = argv [1].check_string ();
+	int start = argv [2].check_int ()->i;
+	int endpos = argv [3].o == &None ? subject->len : argv [3].check_int ()->i;
+	return RegexObj.cast (argv [0].o)->search (subject, start, endpos, 0);
+}
+
+static __object__ *match_RegexObj (REFPTR argv[], int argc)
+{
+	StringObj *subject = argv [1].check_string ();
+	int start = argv [2].check_int ()->i;
+	int endpos = argv [3].o == &None ? subject->len : argv [3].check_int ()->i;
+	return RegexObj.cast (argv [0].o)->search (subject, start, endpos, PCRE_ANCHORED);
+}
+
+static __object__ *ngroup_RegexObj (REFPTR argv[])
+{
+	return newIntObj (RegexObj.cast (argv [0].o)->nsub);
+}
+
+/* >>>>>>>>>> findalliter <<<<<<<<<<<< */
+
+static class reFindAllIterObj : iteratorBase
+{
+	int pos, endpos;
+	RegexObj *R;
+	StringObj *S;
+	REFPTR SS;
+    public:
+	__object__ *xnext ();
+};
+
+reFindAllIterObj.reFindAllIterObj (__object__ *r, __object__ *s)
+{
+	iteratorBase.ctor ((__object__*) (R = (RegexObj*) r));
+	SS.ctor ((__object__*) (S = (StringObj*) s));
+	pos = 0;
+	endpos = S->len;
+}
+
+__object__ *reFindAllIterObj.xnext ()
+{
+	if_unlikely (pos >= endpos)
+		RaiseStopIteration ();
+
+	regmatch_t M;
+	if_unlikely (!R->__search (S, pos, endpos, 0, (int*) &M)) {
+		pos = endpos;
+		RaiseStopIteration ();
+	}
+
+	__object__ *ret = new StringObj binctor (S->str + M.rm_so, M.rm_eo - M.rm_so);
+	pos = M.rm_eo;
+	return ret;
+}
+
+static __object__ *findalliter_RegexObj (REFPTR argv[])
+{
+	StringObj.fenforcetype (argv [1].o);
+	if (RegexObj.checkedcast (argv [0].o)->nsub != 1)
+		RaiseNotImplemented ("findalliter can't caputre subgroups");
+	return new reFindAllIterObj (argv [0].o, argv [1].o);
+}
+
+static const method_attribute regex_methods [] = {
+	{"search",	"Regex.search", SETARGC (4, 4), search_RegexObj},
+	{"match",	"Regex.match", SETARGC (4, 4), match_RegexObj},
+	{"ngroup",	"Regex.ngroup", SETARGC (1, 1), ngroup_RegexObj},
+	{"findalliter",	"Regex.findalliter", SETARGC (2, 2), findalliter_RegexObj},
+	MSENTINEL
+};
+
+/* match object */
+
+static DictObj RegmmMethods __noinit ();
+static const char RegmmType [] = "regex match object";
+static TypeObj RegmmTypeObj;
+
+struct regmatch_t
+{
+	int rm_so, rm_eo;
+};
+
+static class RegmatchObj : __destructible__, seg_allocd
+{
+	const char *const stype = RegmmType;
+	const TypeObj &type = &RegmmTypeObj;
+	DictObj *type_methods = &RegmmMethods;
+
+	regmatch_t *T;
+	int NG;
+	REFPTR S, Regexp;
+	bool Bool ()	{ return true; }
+    public:
+	RegmatchObj (StringObj*, regmatch_t*, int, RegexObj*);
+	__object__ *span (int);
+	__object__ *getattr (__object__*);
+	__object__ *xgetitem (__object__*);
+	void print ();
+	~RegmatchObj ();
+};
+
+static TypeObj RegmmTypeObj ctor (RegmatchObj._v_p_t_r_);
+
+RegmatchObj.RegmatchObj (StringObj *s, regmatch_t *t, int n, RegexObj *r)
+{
+	__destructible__.ctor ();
+	memcpy (T = seg_alloc ((NG = n) * sizeof *t), t, n * sizeof *t);
+	S.ctor (s);
+	Regexp.ctor (r);
+}
+
+__object__ *RegmatchObj.getattr (__object__ *k)
+{
+	__object__ *o = get_type_method (k);
+
+	if (o) return o;
+
+	if (k == Interns.string)
+		return S.o;
+
+	RaiseNoAttribute (k);
+}
+
+__object__ *RegmatchObj.xgetitem (__object__ *o)
+{
+	if (IntObj.isinstance (o))
+		return __group (IntObj.cast (o)->i);
+	StringObj *S = StringObj.checkedcast (o);
+	for (int i = 0; i < S->len; i++)
+		if (!isdigit (S->str [i]))
+			return _group (o);
+	return __group (atoi (S->str));
+}
+
+__object__ *RegmatchObj.__group (int i)
+{
+	if_unlikely (i >= NG || i < 0)
+		RaiseNotImplemented ("regex.group out of range");
+	int so = T [i].rm_so, eo = T [i].rm_eo;
+	if (so == -1)
+		return &None;
+	return new StringObj binctor (S.as_string->str + so, eo - so);
+}
+
+__object__ *RegmatchObj._group (__object__ *o)
+{
+	if (IntObj.isinstance (o))
+		return __group (IntObj.cast (o)->i);
+	return __group (pcre_get_stringnumber (RegexObj.cast (Regexp.o)->R, StringObj.cast (o)->str));
+}
+
+__object__ *RegmatchObj.group (REFPTR argv[], int argc)
+{
+	if (!argc)
+		return __group (0);
+	else if (argc == 1)
+		return _group (argv [0].o);
+	else {
+		REFPTR T = new Tuplen NoneCtor (argc);
+		for (int i = 0; i < argc; i++)
+			T.as_tuplen->__xinititem__ (i, _group (argv [i].o));
+		return T.Dpreserve ();
+	}
+}
+
+__object__ *RegmatchObj.groups ()
+{
+	if (NG == 1)
+		return NILTuple;
+	Tuplen *T = new Tuplen __sizector (NG-1);
+	for (int i = 1; i < NG; i++)
+		T->__xinititem__ (i-1, __group (i));
+	return T;
+}
+
+__object__ *RegmatchObj.span (int i)
+{
+	if_unlikely (i >= NG || i < 0)
+		RaiseNotImplemented ("regex.group out of range");
+	return new Tuplen (newIntObj (T [i].rm_so), newIntObj (T [i].rm_eo));
+}
+
+__object__ *RegmatchObj.end (int i)
+{
+	if_unlikely (i >= NG || i < 0)
+		RaiseNotImplemented ("regex.group out of range");
+	return newIntObj (T [i].rm_eo);
+}
+
+__object__ *RegmatchObj.start (int i)
+{
+	if_unlikely (i >= NG || i < 0)
+		RaiseNotImplemented ("regex.group out of range");
+	return newIntObj (T [i].rm_so);
+}
+
+__object__ *RegmatchObj.span_str (const char *s)
+{
+	return span (pcre_get_stringnumber (RegexObj.cast (Regexp.o)->R, s));
+}
+
+__object__ *RegmatchObj.end_str (const char *s)
+{
+	return end (pcre_get_stringnumber (RegexObj.cast (Regexp.o)->R, s));
+}
+
+__object__ *RegmatchObj.start_str (const char *s)
+{
+	return start (pcre_get_stringnumber (RegexObj.cast (Regexp.o)->R, s));
+}
+
+void RegmatchObj.print ()
+{
+	print_out ("Regexp match object at ", (void*)this);
+}
+
+RegmatchObj.~RegmatchObj ()
+{
+	seg_free (T);
+}
+
+static __object__ *span_regmatch (REFPTR argv[], int argc)
+{
+	if (argc == 1)
+		return RegmatchObj.cast (argv [0].o)->span (0);
+	if (IntObj.isinstance (argv [1].o))
+		return RegmatchObj.cast (argv [0].o)->span (argv [1].as_int->i);
+	return RegmatchObj.cast (argv [0].o)->span_str (argv [1].check_string ()->str);
+}
+
+static __object__ *end_regmatch (REFPTR argv[], int argc)
+{
+	if (argc == 1)
+		return RegmatchObj.cast (argv [0].o)->end (0);
+	if (IntObj.isinstance (argv [1].o))
+		return RegmatchObj.cast (argv [0].o)->end (argv [1].as_int->i);
+	return RegmatchObj.cast (argv [0].o)->end_str (argv [1].check_string ()->str);
+}
+
+static __object__ *start_regmatch (REFPTR argv[], int argc)
+{
+	if (argc == 1)
+		return RegmatchObj.cast (argv [0].o)->start (0);
+	if (IntObj.isinstance (argv [1].o))
+		return RegmatchObj.cast (argv [0].o)->start (argv [1].as_int->i);
+	return RegmatchObj.cast (argv [0].o)->start_str (argv [1].check_string ()->str);
+}
+
+static __object__ *group_regmatch (REFPTR *argv, int argc)
+{
+	return RegmatchObj.cast (argv [0].o)->group (argv + 1, argc - 1);
+}
+
+static __object__ *groups_regmatch (REFPTR *argv, int argc)
+{
+	if (argc == 2)
+		RaiseNotImplemented ("[default] in groups()");
+	return RegmatchObj.cast (argv [0].o)->groups ();
+}
+
+static const method_attribute regexmatch_methods [] = {
+	{"span",	"Match.span", SETARGC (1, 2), span_regmatch},
+	{"end",		"Match.end", SETARGC (1, 2), end_regmatch},
+	{"start",	"Match.start", SETARGC (1, 2), start_regmatch},
+	{"group",	"Match.group", SETARGC (1, INFARGC), group_regmatch},
+	{"groups",	"Match.groups", SETARGC (1, 2), groups_regmatch},
+	MSENTINEL
+};
+
+/* module */
+
+_module __object__ *compile_re (REFPTR argv[], int argc)
+{
+	char *s = StringObj.checkedcast (argv [0].o)->str;
+	int flags = argc == 1 ? 0 : IntObj.fcheckedcast (argv [1].o)->i;
+
+	RegexObj *R = new RegexObj (s, flags);
+	REFPTR Reg = R;
+	if (!R->ok)
+		RaiseNotImplemented ("regex.error");
+	return Reg.Dpreserve ();
+}
+
+/* The arguments are __regobj__ (lib, nsubgroup, match_fptr)
+ *	lib: unused. Will be decref'd when the regobj is destroyed
+ *	nsubgroup: number of subgroups + 1
+ *	match_fptr: pointer to function with prototype
+ *		int func (const char *str, int start, int end, int *ovector);
+ */
+_module __object__ *__regobj__ (REFPTR argv[])
+{
+	IntObj *nsub = argv [1].check_int ();
+	IntObj *match_fptr = argv [2].check_int ();
+	IntObj *search_fptr = argv [3].check_int ();
+	return new RegexObj _extlib_ (argv [0].o, nsub->i, match_fptr->i, search_fptr->i);
+}
+
+static bltinfunc funcs [] = {
+	{"__regobj__",	SETARGC (4, 4), __regobj__, 0},
+	{"compile",	SETARGC (1, 2), compile_re, 0},
+	BSENTINEL
+};
+
+slowcold __object__ *import__re ()
+{
+	RegexMethods.ctor (regex_methods);
+	RegmmMethods.ctor (regexmatch_methods);
+
+	pcre_malloc = __malloc;
+	pcre_free = __free;
+	ModuleObj *ns = new ModuleObj BltinModule ("_re", funcs);
+	ns->AddAttributes (
+		('DOTALL', newIntObj (PY_DOTALL)),
+		('MULTILINE', newIntObj (PY_MULTILINE)),
+		('VERBOSE', newIntObj (PY_VERBOSE)),
+		('IGNORECASE', newIntObj (PY_IGNORECASE)),
+		('PERL_COMPAT', &TrueObj
+	));
+	return ns;
+}

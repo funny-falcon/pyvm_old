@@ -1,0 +1,211 @@
+/*
+ * Faryield Hack
+ *
+ * faryielding is implemented without any new opcodes.
+ * There are two builtins: faryield and far_yield_acceptor,
+ * the .next() method of the far_yield_acceptor,
+ * and a special generator with special bytecode assembly.
+ *
+ * - far_yield_acceptor() constructs the function call and
+ * invokes this special generator.
+ * - faryield(), unwinds the vm stack looking for the special
+ * generator. the hack is that faryield modifies the vm_context
+ * of this generator (which would normally return) to yield the faryielded value.
+ * - The .next() method of the fya iterable resumes the suspended
+ * context.
+ */
+#include "funcwrapper.h"
+#include "generatorobj.h"
+
+final class PyFarGeneratorObj : __container__
+{
+	const char *const stype = PyFuncType;
+	const TypeObj &type = &PyFuncTypeObj;
+	const unsigned int vf_flags |= VF_ITER;
+
+	vm_context *vm, *bvm;
+   public:
+	PyFarGeneratorObj (vm_context *v){ vm = v; bvm = v->caller; __container__.ctor (); }
+	__object__ *fya_next ();
+slow	void print ();
+trv	void traverse ();
+	~PyFarGeneratorObj ();
+};
+
+void PyFarGeneratorObj.print ()
+{ }
+
+extern void release_ctx (vm_context*);
+
+
+PyFarGeneratorObj.~PyFarGeneratorObj ()
+{
+	/*
+	 * There are two possibilities. The generator has either terminated
+	 * normally or it is interrupted but the object must be destroyed.
+	 * In the latter case, free all contexts
+	 */
+	if (bvm->after_yield ())
+		while (vm != bvm) 
+			vm = postfix (vm->caller, vm->release_ctx ());
+}
+
+void PyFarGeneratorObj.traverse ()
+{
+	/* wrong. should traverse_vm(0) and walk manually down to fya_ctx/bvm
+	 * The breakage will be observed if we have created a far_yield_acceptor,
+	 * stored it in a variable and use next() to get elements.
+	 */
+	vm->traverse_vm ();
+}
+
+extern void switch_caller (vm_context*);
+
+static __object__ *PyFarGeneratorObj.fya_next ()
+{
+	/* This is the .next() method. we switch to the interrupted context */
+	switch_caller (vm->caller);
+	CtxSw.vm = vm;
+	return &CtxSw;
+}
+
+static __object__ *get_fya_next (REFPTR argv[])
+{
+	return PyFarGeneratorObj.cast (argv [0].o)->fya_next ();
+}
+
+static __object__ *fya_nextObj;
+
+__object__ *fya_construct (REFPTR argv[])
+{
+	/* Construct a function call (this also exists in pyvm.c+ but not
+	 * exported. So we rewrite it)
+	 * Function calls in pyvm return vm_contexts. Use the returned
+	 * context to create a new PyFarGenerator, which resumes from this
+	 * context, and return the bound method .next() of this instance.
+	 */
+	PyFuncObj.typecheck (argv [0].o);
+	TupleObj *T = argv [1].as_tuplen;
+	DictObj *D = argv [2].as_dict;
+	int nargc = T->len, nkargc = D->len ();
+
+	REFPTR nargv [nargc + nkargc * 2 + 1], *p;
+
+	nargv [0].ctor ();
+	memcpy (nargv + 1, T->data, nargc * sizeof *nargv);
+	p = nargv + 1 + nargc;
+	for (dictEntry *d = 0; (d = D->__iterfast (d));) {
+		p++->o = d->key.o;
+		p++->o = d->val.o;
+	}
+	argv [0]->call (nargv [0], nargv, nargc + (nkargc << 7));
+	CtxSw.vm->caller = get_pvm ();
+
+	return new DynMethodObj (new PyFarGeneratorObj (CtxSw.vm), fya_nextObj);
+}
+
+extern vm_context *get_pvm ();
+extern void do_far_yield (vm_context*);
+extern void do_stop_far_yield (vm_context*);
+extern void *pree;
+
+__object__ *faryield (REFPTR argv[])
+{
+	vm_context *cur = get_pvm ();
+	vm_context *pvm = cur;
+	/* unwind */
+	for (;;) {
+		if_unlikely (!cur)
+			RaiseNotImplemented ("faryield: No far_yield_acceptor");
+		if_unlikely (cur == pree)
+			RaiseNotImplemented ("faryield in preemption!!!");
+		if (cur->FUNC.o != &None && cur->FUNC.as_func->codeobj.o == fyaCode) {
+			/* store the current context (to be resumed by .next()) and
+			 * hack the vm_context of the special generator */
+			PyFarGeneratorObj.cast (cur->fastlocals [3].as_meth->__self__.o)->vm = pvm;
+			cur->fastlocals [0] = argv [0].o;
+			do_far_yield (cur);
+			break;
+		}
+		cur = cur->caller;
+	}
+	return &None;
+}
+
+__object__ *StopFarIteration ()
+{
+	vm_context *cur = get_pvm ();
+	for (;;) {
+		if_unlikely (!cur)
+			RaiseNotImplemented ("faryield: No far_yield_acceptor");
+		if_unlikely (cur == pree)
+			RaiseNotImplemented ("faryield in preemption!!!");
+		if (cur->FUNC.o != &None && cur->FUNC.as_func->codeobj.o == fyaCode) {
+			do_stop_far_yield (cur);
+			break;
+		}
+		cur = cur->caller;
+	}
+	return &None;
+}
+
+static byte fya_bytecode [] = {
+	/* This is the magic generator */
+
+	/* First call fya_construct: when we call far_yield_acceptor
+	 * we get this generator. This code creates the PyFarGenerator object  */ 
+	LOAD_CONST, BYTEARG (1),	// fya_construct
+	LOAD_FAST, BYTEARG (0),		// f
+	LOAD_FAST, BYTEARG (1),		// args
+	LOAD_FAST, BYTEARG (2),		// kwargs
+	CALL_FUNCTION, BYTEARG (3),	// fya_construct (f, args, kwargs)
+	STORE_FAST, BYTEARG (3),	// x
+
+	/* Now the local variable 'x' (3) contains the bound method 'next'
+	 * of the PyFarGeneratorObj  */
+
+	SETUP_LOOP, BYTEARG (20),
+	/* LOOP: */
+
+	/* Normally, without intervention we call 'x()' and the immediately
+	 * return (this is a generator-return, raises StopIteration)  */
+		LOAD_FAST, BYTEARG (3),		// x
+		CALL_FUNCTION, BYTEARG (0),	// x()
+		POP_TOP, /* rmv? */
+		LOAD_CONST, BYTEARG (0),	// None
+		RETURN_GENERATOR,
+
+	/* ... but the faryield() builtin will jump us here where we 'yield'
+	 * the local 0 and then loop forever  */
+		/* yyy: faryield can store directly on the stack */
+		LOAD_FAST, BYTEARG (0),		// f
+		YIELD_VALUE,
+		JUMP_ABSOLUTE, BYTEARG (21),
+
+	POP_TOP,
+	POP_BLOCK,
+
+	/* xxxx: This would be unused */
+	LOAD_CONST, BYTEARG (0),
+	RETURN_VALUE
+};
+
+static inline_machine_code FYA_ASM;
+static __object__ *fyaFunc, *fyaCode;
+
+static slowcold class InitFya : InitObj {
+	int priority = INIT_FUNCS;
+	void todo () {
+		FYA_ASM.make (APAIR (fya_bytecode));
+		Tuplen *cc = new Tuplen (&None, extendFunc ("fya_construct", 3, fya_construct));
+		Tuplen *nm = new Tuplen (Interns.x, Interns.y, Interns.i, Interns.j);
+		fyaCode = new PyCodeObj (FYA_ASM, cc, 1,
+				CO_GENERATOR|CO_VARARGS|CO_VARKEYWORDS, 10/*XXX*/,
+				"*fya*", nm, nm);
+		fyaFunc = MakeFunction (fyaCode, globalocals);
+		__container__.cast (fyaFunc)->GC_ROOT ();
+		fya_nextObj = extendFunc ("fyanext", 1, get_fya_next);
+		fya_nextObj->inf ();
+		__container__.cast (fya_nextObj)->GC_ROOT ();
+	}
+};

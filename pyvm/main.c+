@@ -1,0 +1,36 @@
+const char no_reverse [] = "--/*REVERSE ENGINEERING IS FORBIDEN. YOU SHALL BE PROCECUTED TO THE MAXIMUM EXTENT OF THE LAW*/--";
+const char legal [] = "--/*CONSULT YOUR LEGAL DEPARTMENT BEFORE DOING THIS!!!*/--";
+
+#define PYVM_CORE
+
+//
+// This technique of importing c files is rather baroque and
+// usually a sign of novice prorgammers.  However, in the
+// case of pyvm we do that to achieve extreme inlining. All the
+// files that end in *.h.c+ are the big cdir/pyvm.c file.
+//
+// Also, declaring global variables static is a good thing for
+// advanced optimizing compilers because they can do a full
+// analysis to see when the value of a variable needs to be
+// saved or not. (or not?)
+//
+
+#include "dynlib.h"
+#include "funcwrapper.h"
+#include "generatorobj.h"
+#include "basic.h.c+"
+#include "ints.h.c+"
+#include "floats.h.c+"
+#include "string.h.c+"
+#include "tuple.h.c+"
+#include "list.h.c+"
+#include "dict.h.c+"
+#include "locals.h.c+"
+
+#include "class.h.c+"
+#include "pyvm.h.c+"
+_DynExceptions DynExceptions;
+#include "generators.h.c+"
+#include "set.h.c+"
+#include "typecall.h.c+"
+#include "gc.h.c+"

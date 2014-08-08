@@ -1,0 +1,122 @@
+/*
+ * Memory filesystem.
+ *
+ * Mainly useful for freezing pyvm, so its functionality is
+ * very limited. If we wanted to be able to run pyvm from read-only
+ * media and use memfs as a ramdisk for storing temporaries, we'll
+ * have to intercept 'os' calls (mkdir, chdir, listdir, etc).
+ * This is quite some work and we'd also have to 'mount' the memfs
+ * somewhere in the real fs hierarchy in order to be able to chdir().
+ *
+ * Right now we can only open/read/write the memfs from python
+ * and stat/access/mmap internally.
+ *
+ *
+ * Please:
+ *	shouldn't have more than one fileobjects pointing to the
+ *	same memfs inode (and especially writting).
+ *	don't remove directories while files from them are open!
+ *	don't do crap!
+ */
+
+#include "dynlib.h"
+
+REFPTR memfs_root;
+static REFPTR memfs_inodes;
+
+static class find_inode
+{
+	REFPTR Dir, Name;
+	find_inode (char *path)
+	{
+		char *s, *p;
+		Dir.ctor (memfs_root.as_dict);
+		Name.ctor ();
+		REFPTR D;
+		for (s = path + 1; (p = strchr (s, '/')); s = p + 1) {
+			D = new StringObj binctor (s, p - s);
+			if (!Dir->contains (D.o))
+				return;
+			Dir = Dir->xgetitem (D.o);
+		}
+		Name.ctor (new StringObj (s));
+	}
+};
+
+static int id_n;
+
+int memfs_open_r (char *path, char **mmp, int *mml)
+{
+	find_inode A (path);
+	if (A.Name.o == &None)
+		return -1;
+	StringObj *S = StringObj.cast (A.Dir.as_dict->xgetitem (A.Name.o));
+	*mmp = S->str;
+	*mml = S->len;
+	memfs_inodes.as_dict->xsetitem (newIntObj (id_n),
+			 new Tuplen ((__object__*)S, newIntObj (0)));
+	return id_n++;
+}
+
+int memfs_open_w (char *path, int mode)
+{
+	find_inode A (path);
+	if (A.Name.o == &None)
+		return -1;
+	if (!A.Dir.as_dict->contains (A.Name.o))
+		if (!(mode & O_CREAT))
+			return -1;
+		else goto do_empty;
+	else if (mode & O_TRUNC) do_empty:
+		A.Dir.as_dict->xsetitem (A.Name.o, new StringObj (""));
+	memfs_inodes.as_dict->xsetitem (newIntObj (id_n),
+			 new Tuplen (A.Dir.o, A.Name.o));
+	return id_n++;
+}
+
+int memfs_read (int fd, void *buf, int count)
+{
+	REFPTR N = newIntObj (fd);
+	TupleObj *T = TupleObj.cast (memfs_inodes.as_dict->xgetitem (N.o));
+	StringObj *Data = StringObj.cast (T->__xgetitem__ (0));
+	int offset = IntObj.cast (T->__xgetitem__ (1))->i;
+	count = min (count, Data->len - offset);
+	memcpy (buf, Data->str, count);
+	memfs_inodes.as_dict->xsetitem (N.o,
+			 new Tuplen (Data, newIntObj (offset + count)));
+	return count;
+}
+
+int memfs_write (int fd, void *buf, int count)
+{
+	REFPTR N = newIntObj (fd);
+	TupleObj *T = TupleObj.cast (memfs_inodes.as_dict->xgetitem (N.o));
+	DictObj *Dir = DictObj.cast (T->__xgetitem__ (0));
+	StringObj *Name = StringObj.cast (T->__xgetitem__ (1));
+	REFPTR Text = Dir->xgetitem (Name);
+	Dir->xsetitem (Name, Text.as_string->binary_add (new StringObj binctor (buf, count)));
+	return count;
+}
+
+void memfs_close (int fd)
+{
+	REFPTR N = newIntObj (fd);
+	memfs_inodes.as_dict->xdelitem (N.o);
+}
+
+int memfs_access (char *path, int)
+{
+	/* xxx: throws if a directory is missing */
+	find_inode A (path);
+	return A.Name.o != &None && A.Dir.as_dict->contains (A.Name.o) ? 0 : -1;
+}
+
+static	slowcold class InitMemFS : InitObj {
+	int priority = INIT_MEMFS;
+	void todo () {
+		memfs_root = new DictObj;
+		memfs_root.as_dict->GC_ROOT ();
+		memfs_inodes = new DictObj;
+		memfs_inodes.as_dict->GC_ROOT ();
+	}
+};

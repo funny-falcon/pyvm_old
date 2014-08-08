@@ -1,0 +1,105 @@
+#include "dynlib.h"
+
+///////////////////////////// stdout capturing /////////////////////////////////
+/*
+ * The sys.stdout thing is a gross hack. It works for signle threaded programs
+ * but it's completely useless for multithreaded applications. And it also is
+ * not efficient (because each PRINT_ITEM has to lookup sys.stdout.write).
+ *
+ * A better way would be a builtin set_thread_stdout() which does exactly
+ * that. Threads should inherit this handler from the partent thread upon
+ * creation. The initial thread should start with stdout the standard stdout.
+ *
+ * Problem now is that webpy needs the old schema to work... and we have to
+ * be compatible :(
+ */
+
+extern __object__ *sys_stdout ();
+
+static bool stdout_default = true, have_nl = true;
+static REFPTR current_stdout;	// XXX: traverse!
+
+void prepare_stdout (int c)
+{
+	__object__ *o = sys_stdout ();
+	if (!(stdout_default = o == &None)) {
+		current_stdout = o;
+		if (c == '\n')
+			print (char_string ('\n'));
+		else if (!have_nl)
+			print (char_string (' '));
+	} else {
+		if (c == '\n')
+			OUT->chr ('\n');
+		else	OUT->softspace ();
+	}
+}
+
+static void print_with_call (StringObj *o)
+{
+	have_nl = o->str [o->len-1] == '\n';	// 'kinda' broken
+
+	REFPTR ret;
+	REFPTR arg = o;
+	current_stdout->call (ret, &arg - 1, 1);
+	if (ret.o == &CtxSw)
+		preempt_pyvm (CtxSw.vm);
+}
+
+static void print_one (Rdata arg)
+{
+#if 0
+	if (arg.type != REXT && !stdout_default)
+		OUT->print (arg);
+#endif
+
+	switch (arg.type) {
+	case REXT: {
+		if (StringObj.isinstance (arg.p))
+			print_with_call (arg.p);
+		else probj (arg.p);
+	}
+	ncase RBUFF: {
+		REFPTR S = new StringObj binctor (arg.b.p, arg.b.s);
+		print_with_call (S.as_string);
+	}
+	ncase RLONG: {
+		char tmp [120];
+		REFPTR S = new StringObj binctor (tmp, mytoa10 (tmp, arg.i));
+		print_with_call (S.as_string);
+	}
+	ncase RCHAR: {
+		print_with_call ((StringObj*) char_string (arg.c));
+	}
+	ncase RSTR: {
+		REFPTR S = new StringObj (arg.s);
+		print_with_call (S.as_string);
+	}
+	ndefault:
+fprintf (stderr, "capruted printing subsystem: can't print %s. please hack stdout.c+\n", __enumstr__ (RTYPE, arg.type));
+	}
+}
+
+void print (Rdata arg [...])
+{
+	if (stdout_default) {
+		OUT->print (argv, argc);
+		return;
+	}
+	for (int i = 0; i < argc; i++)
+		print_one (argv [i]);
+}
+
+void print_out (Rdata arg [...])
+{
+	print (argv, argc);
+}
+
+void pprint (Rdata arg [...])
+{
+	/* protect from raise */
+	int x = stdout_default;
+	stdout_default = true;
+	OUT->pprint (argv, argc);
+	stdout_default = x;
+}

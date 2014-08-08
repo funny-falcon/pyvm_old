@@ -1,0 +1,439 @@
+##############################################################################
+# ELF reader
+#
+# WARNING: This is 32-bit Little Endian ONLY. There is no idea about
+# other systems.
+##############################################################################
+'''
+ The operating system's dynamic loader is designed for a case where:
+
+	MANY applications _share_ FEW but BIG libraries 
+
+ (imagine that every running program uses libc).
+ In a JIT situation where we use the external compiler to compile
+ little routines just in time, the requirements are much different:
+
+	ONE application uses MANY and SMALL libraries
+
+ so the libdl library is inapropriate for this case (because
+ probably it loads the code of libraries in their own mmap'd
+ space, which is marked MAP_SHARED, has pages, etc).
+
+ This is an alternative dynamic linker. It works by linking
+ *object* files (not shared relocatable files). It loads the
+ code (`.text`) data, bss and rodata sections in python
+ "array" objects. It relocates LOCAL symbols (static variables).
+ And it returns a dictionary which maps the addresses of
+ functions from the `.text` section. This is possible because
+ array objects in pyvm already have a member function "cptr()"
+ which returns the pointer of the array's data.
+
+ This dynamic linker cannot handle external symbols. This
+ means that the object file may not call other functions
+ from other libraries. So no libc, printf, malloc, etc.
+ We can't even link to pyvm.
+
+ But because the linker is suitable for JITing and the
+ C code is generated, we can do the linking at the C program
+ generation. For example, suppose we wish to generate, compile
+ and link a program that puts() "hello world". Normally,
+ that'd be:
+	void func ()
+	{
+		puts ("hello world!");
+	}
+
+ But that is not possible because `puts` is an external symbol.
+ Alternatively, we can generate a C code such as:
+
+	PROG = r"""
+	typedef void (*putsfunc_t)(const char*);
+	void func ()
+	{
+		((putsfunc_t)(0x%x)) ("hello world!");
+	}
+	""" % address_of_the_puts_function;
+
+ that would give something like:
+
+	typedef void (*putsfunc_t)(const char*);
+	void func ()
+	{
+		((putsfunc_t) 0x80482fc) ("hello world!");
+	}
+
+ `0x80482fc` is the address of the puts function. Suprisingly,
+  if we compile and link this to our application, it will work!
+
+ Eventually, the interesting part is that we use the -guru- function
+ `fptr_wrapper` which takes as argument an integer which is the
+ address of a C function, and returns a python builtin callable.
+''';
+'''
+ The elf loader has been tested with the re2c jitter.
+ In rejit/__init__.pe, change dll=1 to dll=0 to enable pelf
+ dynamic linking.
+
+ valgrind has shown that the memory usage is indeed much less.
+ But because pelf is still a very dangerous and unstable module
+ it's not enabled by default. It may be useful for frozen JIT
+ chunks.
+''';
+
+from pyvm_extra import compose_iFc as iFc, decompose_iTc as iTc;
+from struct     import unpack, sizeof as Sizeof;
+from array      import array;
+import sys;
+
+SHT_RELOC = 9;	# RELA or REL ?? 9 or 4
+ET_REL = 1;
+ST_LOCAL = 0;
+ST_GLOBAL = 1;
+STB_GLOBAL = 1;
+STT_FUNC = 2;
+STT_SECTION = 3;
+
+class elfstruct
+{
+	def new (cls, s)
+		return cls (*unpack (cls.struct, s));
+	new = classmethod (new);
+	def ith (cls, s, i)
+		return cls (*unpack (cls.struct, s [cls.sizeof * i : cls.sizeof * (i + 1)]));
+	ith = classmethod (ith);
+	method __str__ ()
+		return str ($__dict__);
+}
+
+class elfhdr(elfstruct)
+{
+	# Elf32_Ehdr
+	struct = 'HHiiiiiHHHHHH';
+	sizeof = Sizeof (struct);
+
+	method __init__ ($e_type, $e_machine, $e_version, $e_entry, $e_phoff, $e_shoff, $e_flags,
+		      $e_ehsize, $e_phentsize, $e_phnum, $e_shentsize, $e_shnum, $e_shstrndx) ;
+}
+
+class elfshdr(elfstruct)
+{
+	# Elf32_Shdr
+	struct = 'iiiiiiiiii';
+	sizeof = Sizeof (struct);
+
+	method __init__ ($sh_name, $sh_type, $sh_flags, $sh_addr, $sh_offset, $sh_size,
+		     $sh_link, $sh_info, $sh_addralign, $sh_entsize);
+}
+
+class elfsym(elfstruct)
+{
+	# Elf32_Sym
+	struct = 'iiibbh';
+	sizeof = Sizeof (struct);
+
+	method __init__ ($st_name, $st_value, $st_size, $st_info, $st_other, $st_shndx);
+	method ST_TYPE ()
+		return $st_info & 0xf;
+	method ST_BIND ()
+		return $st_info >> 4;
+}
+
+class elfrel(elfstruct)
+{
+	# Elf32_Rel
+	struct = 'ii';
+	sizeof = Sizeof (struct);
+
+	method __init__ ($r_offset, $r_info);
+	method ELF32_R_TYPE ()
+		return $r_info & 0xff;
+	method ELF32_R_SYM ()
+		return $r_info >> 8;
+}
+
+gen iterdata (cls, data)
+{
+	s = cls.sizeof;
+	if (len (data) % s) {
+		print "len=", len(data), s;
+		raise "Error";
+	}
+	n = len (data) / s;
+	for (i in range (n))
+		yield cls.new (data [i*s:i*s+s]);
+}
+
+class Error(Exception)
+{ }
+
+class ELF
+{
+	method read (fr, sz)
+		return $F [fr:fr+sz];
+
+	method __init__ (filename)
+	{
+		$F = open (filename).read ();
+
+		$e_ident = $F [:16];
+		if ($e_ident [0] != chr (127) or $e_ident [1:4] != 'ELF')
+			raise Error ("Not an ELF file");
+
+		# ELF header
+		$ehdr = elfhdr.new ($read (16, elfhdr.sizeof));
+		if ($ehdr.e_type != ET_REL)
+			raise Error ("Not an object file");
+#print $ehdr.__dict__;
+
+		# Load section headers and shstr (which allows us
+		# to lookup sections by name)
+		sizeof_shdr = $ehdr.e_shnum * elfshdr.sizeof;
+		$shdr = $read ($ehdr.e_shoff, sizeof_shdr);
+		shstrndx_hdr = $get_section_hdr ($ehdr.e_shstrndx);
+		$shstr = $read (shstrndx_hdr.sh_offset, shstrndx_hdr.sh_size);
+
+		# Load `.text` section
+		text_no = $find_elf_section ('.text');
+		Atext = array ('c', $load_section (text_no));
+		text_addr = Atext.cptr ();
+
+		# Create `.bss` section (initialized with zero)
+		bss_no = $find_elf_section ('.bss');
+		bss_hdr = $get_section_hdr (bss_no);
+		Abss = array ('c', [0] * bss_hdr.sh_size);
+		bss_addr = Abss.cptr ();
+
+		# Load `.data` section
+		data_no = $find_elf_section ('.data');
+		if (data_no) {
+			Adata = array ('c', $load_section (data_no));
+			data_addr = Adata.cptr ();
+		} else Adata = data_addr = None;
+
+		# Load `.rodata` section
+		rodata_no = $find_elf_section ('.rodata');
+		if (rodata_no) {
+			Arodata = array ('c', $load_section (rodata_no));
+			rodata_addr = Arodata.cptr ();
+		} else Arodata = rodata_addr = None;
+
+		# load `.symtab` for our own use
+		$symtabndx = $find_elf_section (".symtab");
+		$symtab = $load_section ($symtabndx);
+		strtabndx = $get_section_hdr ($symtabndx).sh_link;
+		$strtab = $load_section (strtabndx);
+
+		# load the relocation section of the text section
+		trel = $find_reloc (text_no);
+		if (trel) {
+			# Must relocate. The `.rel.text` section's fields
+			# contain the member r_offset. This points to an
+			# offset inside the `.text` data which must be
+			# patched (linked) with the real addresses from
+			# data and bss. The contains of the data to-be-patched
+			# is the displacement in data or bss. Code speaks better.
+			for (i in iterdata (elfrel, $load_section (trel))) {
+				s= $get_sym (i.ELF32_R_SYM ());
+				if (s.ST_BIND () != ST_LOCAL)
+					raise Error ("Library needs external symbols");
+
+				if (s.st_shndx == bss_no)
+					addr = bss_addr;
+				else if (s.st_shndx == data_no)
+					addr = data_addr;
+				else if (s.st_shndx == rodata_no)
+					addr = rodata_addr;
+				else {
+					$pr_sections ();
+					raise Error ("relocation from other section [%i]" % s.st_shndx);
+				}
+
+				ro = i.r_offset;
+				offset = iFc (*tuple (Atext [ro:ro+4])) + addr;
+				Atext [ro] = offset & 0xff;
+				Atext [ro+1] = (offset>>8) & 0xff;
+				Atext [ro+2] = (offset>>16) & 0xff;
+				Atext [ro+3] = (offset>>24) & 0xff;
+			}
+		}
+
+		trel = $find_reloc (rodata_no);
+		if (trel) {
+			# relocate rodata. Usually this happens for switch() tables
+			# where the jump addresses are in a table. We handle only
+			# this case. It seems that ST_TYPE == STT_SECTION and the
+			# ELF32_R_TYPE has the section number.
+			for (i in iterdata (elfrel, $load_section (trel)))  {
+				s= $get_sym (i.ELF32_R_SYM ());
+
+				if (s.ST_TYPE () != STT_SECTION or s.ST_BIND () != ST_LOCAL)
+					raise Error ("unknown relocation in .rodata");
+				t = i.ELF32_R_TYPE ();
+				if (t != text_no)
+					raise Error ("unknown relocation in .rodata");
+
+				ro = i.r_offset;
+				offset = iFc (*tuple (Arodata [ro:ro+4])) + text_addr;
+				Arodata [ro] = offset & 0xff;
+				Arodata [ro+1] = (offset>>8) & 0xff;
+				Arodata [ro+2] = (offset>>16) & 0xff;
+				Arodata [ro+3] = (offset>>24) & 0xff;
+			}
+		}
+		# xxxx: possibly we have more relocations for data
+		# xxxx: will crash and it sure won't be easy to debug!
+
+		# Load offsets of global functions
+		$entries = {};
+		for (i in iterdata (elfsym, $symtab))
+			if (i.ST_BIND () == STB_GLOBAL and i.ST_TYPE () == STT_FUNC)
+				$entries [$sym_name (i)] = i.st_value + text_addr;
+
+		# must keep these around as long as the library
+		# is used.
+		$libdata = Atext, Abss, Adata, Arodata;
+	}
+
+	method get_sym (i)
+		return elfsym.ith ($symtab, i);
+
+	method get_section_hdr (i)
+		return elfshdr.ith ($shdr, i);
+
+
+	method load_section (i)
+	{
+		i = $get_section_hdr (i);
+		return $read (i.sh_offset, i.sh_size);
+	}
+
+	method find_elf_section (n)
+		for (i in range ($ehdr.e_shnum)) {
+			sh_n = $get_section_hdr (i).sh_name;
+			if ($shstr [sh_n:].startswith (n))
+				return i;
+		}
+
+	method sym_name (s)
+	{
+		sh_n = s.st_name;
+		j = $strtab [sh_n:].find (chr (0));
+		return $strtab [sh_n:sh_n+j];
+	}
+
+	method pr_sections ()
+	{
+		for (i in range ($ehdr.e_shnum)) {
+			sec = $get_section_hdr (i);
+			sh_n = sec.sh_name;
+			j = $shstr [sh_n:].find (chr (0));
+			print 'section', i, $shstr [sh_n:sh_n+j], sec.sh_type,
+					 sec.sh_info, sec.sh_size;
+		}
+	}
+
+	method find_reloc (n)
+		for (i in range ($ehdr.e_shnum)) {
+			sec = $get_section_hdr (i);
+			if (sec.sh_type == SHT_RELOC and sec.sh_info == n)
+				return i;
+		}
+}
+
+#
+# This dllobj has the same API as the _JIT.dllObj
+#
+class dllobj
+{
+	import _JIT;
+
+	method __init__ ($D, $stuff);
+
+	method get (t, blocking=False)
+	{
+		r, n, a = t;
+		# attach stuff (the segments) to the callable
+		return $_JIT.fptr_wrapper (r, $D [n], a, blocking, $stuff);
+	}
+
+	method sym (n)
+		return $D [n];
+}
+
+def dllopen (fnm)
+{
+	E = ELF (fnm);
+	return dllobj (E.entries, E.libdata);
+}
+
+#############################################################################
+# testing
+#############################################################################
+
+def test ()
+{
+	from os import system;
+	import DLL;
+
+	# find the address of 'puts'
+	try {
+		# in GNU/linux, somebody thought that /usr/lib/libc.so
+		# being a linker script, would be cool. We load libc.so.6
+		libc = DLL.dllopen ('libc.so.6');
+		puts_address = libc.sym ('puts');
+	} except () puts_address = 0;
+
+	PROG = r"""
+		/* .bss variable */
+		static int x;
+		/* .data variable */
+		static int y = 1133;
+		/* .rodata variable */
+		static const int c = 100000;
+
+		static int f ()
+		{
+			return x++ + (y-=2) + c;
+		}
+		int foo (int a)
+		{
+			return a + f ();
+		}
+		void bar ()
+		{
+			x = y = 0;
+		}
+
+		/* Test C-level linking. May not work
+		 * if we haven't managed to get the address
+		 * of puts
+		 */
+		void doputs (char *msg)
+		{
+			typedef void (*pF)(const char*);
+			pF putsf = (pF) 0x%x;
+			if (putsf)
+				putsf (msg);
+		}
+	""" % puts_address + '\n';
+	open ('objfile.c', 'w').write (PROG);
+	# No -O3 because we don't want inlining in order to check
+	# relocations.
+	system ('gcc -c objfile.c');
+	E = ELF ('objfile.o');
+	D = dllobj (E.entries, E.libdata);
+
+	foo = D.get (('i', 'foo', 'i'));
+	print foo (1);
+	print foo (1);
+	print foo (1);
+	bar = D.get (('', 'bar', ''));
+	bar ();
+	print foo (1);
+	print foo (1);
+	doputs = D.get (('', 'doputs', 's'));
+	doputs ("hello world!");
+}
+
+if (__name__ == '__main__')
+	test ();

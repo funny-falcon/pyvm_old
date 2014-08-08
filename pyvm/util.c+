@@ -1,0 +1,35 @@
+#include "oputil.h"
+
+/**
+ ** special version of itoa base 10.
+ **/
+int mytoa10 (char *dest, register int num)
+{
+	char tmp [30];
+	register char *p = tmp + 29;
+	int neg;
+
+	if ((neg = num < 0))
+		num =- num;
+
+	*p-- = 0;
+	if_likely (num) for (; num; num /= 10)
+		*p-- = 48 + num % 10;
+	else *p-- = '0';
+
+	if (neg) *p-- = '-';
+
+	neg = (tmp + 29) - p;
+	memcpy (dest, p + 1, neg);
+	return neg - 1;
+}
+
+bool internable (const char *s, int l)
+{
+	if (l > 15)
+		return false;
+	while (l--)
+		if (*s++ <= ' ')
+			return false;
+	return true;
+}

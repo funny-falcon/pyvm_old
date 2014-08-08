@@ -1,0 +1,212 @@
+extern "pthread.h" {
+#include <pthread.h>
+#include <semaphore.h>
+#include <stdio.h>
+#include <unistd.h>
+}
+extern "semaphore.h" { }
+extern "stdio.h" { }
+extern "unistd.h" { }
+#include "mallok.h"
+
+extern int boot_pyvm (void*);
+
+#include "threading.h"
+#include "inits.h"
+#define COLS "\033[01;37m"
+#define COLE "\033[0m"
+#define PPP "["COLS"%i"COLE"] "
+#define CTH getpid ()
+
+/******************************************************************************
+	threading with three semaphores (GIL, WIL, CTRL)
+
+	Basically, the main lock is the GIL (global interpreter lock) which
+	ensures that only one thread (the master thread) is running pyvm.
+	The master thread takes care of task switching and co-routines
+	and it is possible that we will not need any OS threads at all.
+
+	The interesting case is when the master thread will block.
+	In this case it will release GIL.  When the thread returns from the
+	blocking call, there are two possibilities:
+		- If the GIL is unlocked, it means that there is no master
+		thread either because all the other threads are blocking
+		or because none of the other threads had the time to get GIL.
+		In this case the thread re-locks GIL and becomes the master
+		- If GIL is locked, the thread waits on WIL.
+
+	If the master thread from boot_pyvm, detects that there is somebody
+	waiting on WIL, it will return, post WIL and wait on GIL.
+
+	Finally, there is CTRL. When a thread goes to blocking AND there are
+	tasks to run (wantnew) AND there is nobody waiting on GIL, the thread
+	posts CTRL.  In the case there is at least one thread created, the
+	initial thread has become "the thread creator" which waits on CTRL.
+	When CTRL is posted, the thread creator makes a new thread which
+	then waits on GIL.
+
+	With this we manage the 'dynamic thread pool' which means that new
+	OS threads are created only when there is need for new OS threads
+	because all the existing ones are blocking. At the moment we do not
+	remove threads from the thread pool.
+******************************************************************************/
+
+bool multitasking;
+static sem_t GIL, WIL, CTRL;
+volatile bool ctrl_end;
+volatile static int GILers, WILers;
+
+#define getpid pthread_self
+
+static int GIL_owner;
+
+static void *_entry (void *v)
+{
+	int myID = getpid ();
+	int pyvm_state;
+
+	while (1) {
+		sem_wait (&GIL);
+		--GILers;
+
+		GIL_owner = myID;
+		pyvm_state = boot_pyvm (TAKE_OVER);
+
+		if (pyvm_state > 0) {
+			/* if have_pending () somebody's waiting on WIL
+			 * if not, nobody's waiting on WIL yet but somebody will
+			 *  and since there are no other tasks left to run,
+			 *  pre-post WIL and go to sleep
+			 */
+			--WILers;
+			sem_post (&WIL);
+		} else if (pyvm_state == 0) {
+			/* END_THREAD */
+		} else {
+			/* END_VM */
+			ctrl_end = 1;
+			sem_post (&CTRL);
+		}
+		++GILers;
+	}
+
+	/* I'm outa here */
+	return 0;
+}
+
+static void *_entry0 (void *v)
+{
+	++GILers;
+	return _entry (v);
+}
+
+bool fork_thread ()
+{
+	if (!multitasking) {
+		multitasking = -1;
+		pthread_t T;
+		pthread_attr_t A;
+		pthread_attr_init (&A);
+		pthread_attr_setdetachstate (&A, PTHREAD_CREATE_DETACHED);
+		pthread_create (&T, &A, _entry0, (void*) getpid ());
+		sched_yield ();
+		return true;
+	}
+	return false;
+}
+
+void begin_allow_threads (bool wantnew)
+{
+	if (WILers > 0 || ! wantnew) {
+		--WILers;
+		sem_post (&WIL);
+	} else {
+		if (!GILers) {
+			++GILers;
+			sem_post (&CTRL);
+		}
+		sem_post (&GIL);
+	}
+}
+
+void end_allow_threads ()
+{
+	if (sem_trywait (&GIL) == -1) {
+		++WILers;
+		sem_wait (&WIL);
+	}
+	/* XXX: this is a system call and costs too much.
+	   please save it at begin_allow from GIL_owner and
+	   reuse.  */
+	GIL_owner = getpid ();
+}
+
+void main_thread (void *ctx)
+{
+#ifndef CPPUNWIND
+	void *v = __lwcbuiltin_get_estack();
+#endif
+	int s = boot_pyvm (ctx);
+	if (s != -1) {
+		sem_post (&GIL);
+		while (1) {
+			sem_wait (&CTRL);
+			if (ctrl_end)
+				break;
+			pthread_t T;
+			pthread_attr_t A;
+			pthread_attr_init (&A);
+			pthread_attr_setdetachstate (&A, PTHREAD_CREATE_DETACHED);
+			pthread_create (&T, &A, _entry, (void*) getpid ());
+		}
+	}
+#ifndef CPPUNWIND
+	__lwcbuiltin_set_estack (v);
+#endif
+}
+
+bool have_pending ()
+{
+	if (multitasking == -1) {
+		multitasking = 1;
+		return true;
+	}
+	return WILers > 0;
+}
+
+bool am_GIL_owner ()
+{
+	if (!multitasking)
+		return true;
+	int v;
+	sem_getvalue (&GIL, &v);
+	return v == 0 && GIL_owner == getpid ();
+}
+
+unsigned int ThreadPID ()
+{
+	/* XXX: How TF do we get LWP?
+	 * In the old linuxthreads, getpid() returned the PID of each task
+	 * Now with NPTL this is fsckd and getpid() returns the parent PID
+	 * which is the same for all threads. pthread_self() returns some
+	 * other ID...
+	 */
+	return getpid ();
+}
+
+uint NGIL ()
+{
+	return GILers;
+}
+
+////////////////////////////// initialize /////////////////////////////////
+
+static class InitThreads : InitObj {
+	int priority = INIT_LAST;
+	void todo ()
+	{
+		sem_init (&GIL, 0, 0);
+		sem_init (&WIL, 0, 0);
+		sem_init (&CTRL, 0, 0);
+	}
+};

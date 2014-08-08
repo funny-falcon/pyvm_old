@@ -1,0 +1,662 @@
+
+#define PERTURB_SHIFT 5
+
+static class DummyObj : __permanent__
+{
+	const char *stype = "<stupid>";
+	void print () {}	// to undo pure
+	// make it look like a string
+	DummyObj ()		{ len = -1; }
+	int len;
+};
+
+static DummyObj dummy;
+
+//#########################################################################################
+//#########################################################################################
+
+/*** We'll do the expanding hash table with exact python's
+ *** dict parameters.  Just to avoid the hassle of benchmarks
+ *** of "cases where this performs better or that performs
+ *** worse". We can provide alternative dicts/trees that
+ *** expand/shrink faster but the lookup costs more, as non
+ *** default.
+ ***/
+
+//#########################################################################################
+//#########################################################################################
+
+void dictionary.init (int size)
+{
+	used = fill = itrn = 0;
+	if (!size) {
+		memset (tbl = smalltbl, 0, sizeof smalltbl);
+		mask = DICT_MINSIZE - 1;
+	} else {
+		memset (tbl = __malloc (size * sizeof *tbl), 0, size * sizeof *tbl);
+		mask = size - 1;
+	}
+	max = (mask + 1) * 2;
+}
+
+bool dictionary.cmp_key_ent (dictEntry *D, __object__ *k)
+{
+	return k->cmp_EQ (D->key.o);
+}
+
+bool dictionaryStr.cmp_key_ent (dictEntry *D, __object__ *k)
+{
+	return D->key.o == k || D->key.as_string->cmp_EQ_same (k);
+}
+
+bool dictionaryInt.cmp_key_ent (dictEntry *D, __object__ *k)
+{
+	return D->key.o != &dummy;
+}
+
+long dictionary.get_hash (__object__ *k)
+{
+	return k->hash ();
+}
+
+long dictionaryStr.get_hash (__object__ *k)
+{
+	return (*StringObj.cast (k)).hash ();
+}
+
+long dictionaryInt.get_hash (__object__ *k)
+{
+	return (*IntObj.cast (k)).hash ();
+}
+
+dictEntry *dictionary._lookup (unsigned long h, __object__ *k)
+{
+	register unsigned long mask = mask, i = h & mask, p;
+	register dictEntry *tbl = tbl, *ep;
+
+	ep = &tbl [i];
+	if (!ep->key.o)
+		return ep;
+
+	if_likely (ep->hash == h && cmp_key_ent (ep, k))
+		return ep;
+
+	dictEntry *freeslot = 0;
+	if_unlikely (ep->key.o == &dummy)
+		freeslot = ep;
+
+	for (p = h; ; p >>= PERTURB_SHIFT) {
+		i = 5 * i + p + 1;
+		ep = &tbl [i & mask];
+		if (!ep->key.o)
+			return freeslot ?: ep;
+		if (ep->hash == h && cmp_key_ent (ep, k))
+			return ep;
+		if_unlikely (ep->key.o == &dummy && !freeslot)
+			freeslot = ep;
+	}
+}
+
+void dictionary.resize () noinline;
+
+void dictionary.resize ()
+{
+	if_unlikely (itrn)
+		RaiseNotImplemented ("RuntimeError: dictionary changed during iteration");
+
+	int i, ns;
+	dictEntry *otbl = tbl, *atbl = tbl, *ntbl;
+
+	for (i = used * (used > 50000 ? 2 : 4), ns = DICT_MINSIZE; ns <= i; ns *= 2);
+
+	if (ns == DICT_MINSIZE) {
+		if ((ntbl = smalltbl) == otbl)
+			if (fill == used)
+				return;
+			else {
+				dictEntry *st = (dictEntry*) alloca (sizeof smalltbl);
+				memcpy (otbl = st, ntbl, sizeof smalltbl);
+			} else;
+		memset (smalltbl, 0, sizeof smalltbl);
+	} else	ntbl = (dictEntry*) __calloc (ns, sizeof *ntbl);
+
+	mask = ns - 1;
+	max = (mask + 1) * 2;
+	tbl = ntbl;
+	fill = i = used;
+
+	for (; i > 0; ++otbl)
+		if (otbl->val.o) {
+			unsigned long h = otbl->hash & mask;
+
+			if (ntbl [h].key.o)
+				for (unsigned long p = otbl->hash; ; p >>= PERTURB_SHIFT) {
+					h = 5 * h + p + 1;
+					if (!ntbl [h & mask].key.o)  {
+						ntbl [h & mask].copy (otbl);
+						break;
+					}
+				}
+			else ntbl [h].copy (otbl);
+			--i;
+		}
+
+	if (atbl != smalltbl)
+		__free (atbl);
+}
+
+void dictionary.test_resize ()
+{
+	if_unlikely ((3 * fill >= max || (used < 4 * fill && tbl != smalltbl)) && !itrn)
+		resize ();
+}
+
+inline bool dictionary.type_good (__object__ *k)
+{
+	return true;
+}
+
+inline void dictionary.mutateby (__object__ *k)
+{ }
+
+inline bool dictionaryInt.type_good (__object__ *k)
+{
+	return IntObj.isinstance (k);
+}
+
+inline void dictionaryInt.mutateby (__object__ *k)
+{
+	dictionary.Mutate (this);
+}
+
+bool dictionaryStr.type_good (__object__ *k)
+{
+	return StringObj.isinstance (k);
+}
+
+inline void dictionaryStr.mutateby (__object__ *k)
+{
+	if (IntObj.isinstance (k) && !used)
+		dictionaryInt.Mutate (this);
+	else	dictionary.Mutate (this);
+}
+
+bool dictionaryStrAlways.type_good (__object__ *k)
+{
+	return StringObj.isinstance (k);
+}
+
+inline void dictionaryStrAlways.mutateby (__object__ *k)
+{
+	RaiseValueError ("String-only dictionary");
+}
+
+static dictEntry *dictionary.empty_entry () noinline;
+static dictEntry *dictionary.empty_entry ()
+{
+	int i = 0;
+	while (tbl [i].val.o) i++;
+	return &tbl [i];
+}
+
+dictEntry *dictionary.lookup (__object__ *k)
+{
+	/** Query lookup
+	**/
+	if_likely (type_good (k))
+		return _lookup (get_hash (k), k);
+	return empty_entry ();
+}
+
+dictEntry *dictionary.lookup (__object__ *k, long *h)
+{
+	/** Modifying lookup
+	**/
+	if_likely (type_good (k))
+		return _lookup (*h = get_hash (k), k);
+	mutateby (k);
+	return ((dictionary*)this)->lookup (k, h);
+}
+
+__object__ *dictionary.get (__object__ *k)
+{
+	return lookup (k)->val.o;
+}
+
+void dictionary.insert (__object__ *k, __object__ *v)
+{
+	long h;
+	dictEntry *ep = lookup (k, &h);
+	if (ep->val.o) ep->val = v;
+	else {
+		/** Woah! This may seem awkward to python developers.
+		*** The thing is that we do not care about correctly inc/dec refing
+		*** the dummy object -- it's a __permanent__
+		**/
+		++used;
+		if_likely (!ep->key.o)
+			++fill;
+		ep->key.ctor (k);
+		ep->val.ctor (v);
+		ep->hash = h;
+		if_unlikely (3 * fill >= max)
+			resize ();
+	}
+}
+
+void dictionary.remove (__object__ *k)
+{
+	dictEntry *ep = lookup (k);
+	if_unlikely (!ep->val.o)
+		RaiseKeyError (k);
+	--used;
+	ep->key.__copyobj (&dummy);
+	ep->val.null ();
+}
+
+__object__ *dictionary.pop (__object__ *k)
+{
+	dictEntry *ep = lookup (k);
+	if (ep->val.o) {
+		REFPTR R = ep->val.o;
+		--used;
+		ep->key.__copyobj (&dummy);
+		ep->val.null ();
+		return R.Dpreserve ();
+	}
+	return 0;
+}
+
+__object__ *dictionary.setdefault (__object__ *k, __object__ *v)
+{
+	long h;
+	dictEntry *ep = lookup (k, &h);
+	if (ep->val.o) return ep->val.o;
+	++used;
+	if_likely (!ep->key.o)
+		++fill;
+	ep->key.ctor (k);
+	ep->val.ctor (v);
+	ep->hash = h;
+	if_unlikely (3 * fill >= max)
+		resize ();
+	return v;
+}
+
+bool dictionary.contains (__object__ *k)
+{
+	if_unlikely (!type_good (k))
+		return false;
+
+	register unsigned long h = get_hash (k);
+	register unsigned long mask = mask, i = h & mask, p;
+	dictEntry *tbl = tbl, *ep = &tbl [i];
+
+	if (!ep->key.o) return false;
+	if (ep->hash == h && cmp_key_ent (ep, k)) return true;
+
+	for (p = h; ; p >>= PERTURB_SHIFT) {
+		i = 5 * i + p + 1;
+		ep = &tbl [i & mask];
+		if (!ep->key.o) return false;
+		if (ep->hash == h && cmp_key_ent (ep, k)) return true;
+	}
+}
+
+dictEntry *dictionary.__iterfast (dictEntry *d)
+{
+	if_unlikely (!d) {
+		if (tbl [0].val.o)
+			return &tbl [0];
+		d = &tbl [0];
+	}
+
+	for (++d; d <= tbl + mask && d > tbl; d++)
+		if (d->val.o)
+			return d;
+	return 0;
+}
+
+void dictionary.ins_keys (ListObj L)
+{
+	dictEntry *tbl = tbl;
+	REFPTR *data = L.data;
+
+	for (unsigned long i = L.len = used; i; tbl++)
+		if (tbl->val.o)
+			data++->ctor (tbl->key.o), --i;
+}
+
+void dictionary.ins_vals (ListObj L)
+{
+	dictEntry *tbl = tbl;
+	REFPTR *data = L.data;
+
+	for (unsigned long i = L.len = used; i; tbl++)
+		if (tbl->val.o)
+			data++->ctor (tbl->val.o), --i;
+}
+
+void dictionary.ins_itms (ListObj L)
+{
+	dictEntry *tbl = tbl;
+	REFPTR *data = L.data;
+
+	for (unsigned long i = L.len = used; i; tbl++)
+		if (tbl->val.o)
+			data++->ctor (new Tuplen (tbl->key.o, tbl->val.o)), --i;
+}
+
+dictionary.~dictionary ()
+{
+	dictEntry *tbl = tbl, *atbl = tbl;
+	unsigned long i = used;
+	this->used = 0;
+	this->tbl = smalltbl;
+
+	for (; i; tbl++)
+		if (tbl->val.o) {
+			tbl->key.dtor ();
+			tbl->val.dtor ();
+			--i;
+		}
+
+	if (atbl != smalltbl)
+		__free (atbl);
+}
+
+// these are used for setattr/getattr.  We know that k is definitelly a string
+
+__object__ *dictionaryStrAlways.lookup_stri (__object__ *k)
+{
+	return (*this).lookup (k)->val.o;
+}
+
+static void dictionaryStrAlways.insert_new (dictEntry*, __object__*, __object__*, long) noinline;
+
+extern void NOTHING ();
+
+static void dictionaryStrAlways.insert_new (dictEntry *ep, __object__ *k, __object__ *v, long h)
+{
+//	NOTHING ();	/* this gives a great boost!! Must look into assembly.
+//			   gcc inlines the function despite the fact that its noinline?  */
+	++used;
+	if_likely (!ep->key.o)
+		++fill;
+	ep->key.ctor (k);
+	ep->val.ctor (v);
+	ep->hash = h;
+	if_unlikely (3 * fill >= max)
+		resize ();
+}
+
+void dictionaryStrAlways.insert_stri (__object__ *k, __object__ *v)
+{
+	long h = get_hash (k);
+	dictEntry *ep = _lookup (h, k);
+	if_likely (ep->val.o != 0) ep->val = v;
+	else insert_new (ep, k, v, h);
+}
+
+// weakref cleaner
+
+void dictionary.clean_weak_vals (register int rc)
+{
+	if (itrn)
+		return;
+
+	register dictEntry *tbl = tbl;
+	register long i = used;
+
+	for (; i > 0; tbl++)
+		if (tbl->val.o) {
+			if (tbl->val.o->refcnt == rc) {
+				tbl->key.__copyobj (&dummy);
+				tbl->val.null ();
+				--used;
+			}
+			--i;
+		}
+
+	test_resize ();
+}
+
+void dictionary.clean_weak_set ()
+{
+	if (itrn)
+		return;
+
+	dictEntry *tbl = tbl;
+	long i = used;
+
+	for (; i > 0; tbl++)
+		if (tbl->val.o) {
+			if (tbl->key->refcnt == 1) {
+				tbl->key.__copyobj (&dummy);
+				tbl->val.o = 0;
+				--used;
+			}
+			--i;
+		}
+
+	test_resize ();
+}
+
+//#########################################################################################
+//#########################################################################################
+//#########################################################################################
+//#########################################################################################
+/* >>>>>>>>>>> iterators <<<<<<<<<<< */
+
+static class DictIterObj : iteratorBase
+{
+	int i, n, c;
+	dictionary &D;
+	__object__ *i_th (dictEntry *ep) { return ep->key.o; }
+   public:
+	DictIterObj (DictObj*);
+	DictIterObj (SetObj*);
+auto	__object__ *xnext ();
+	int len ()		{ return D.used - n; }
+	~DictIterObj ()		{ if (!c) --D.itrn; }
+};
+
+DictIterObj.DictIterObj (DictObj *x)
+{
+	iteratorBase.ctor (x);
+	dereference D = &x->D;
+	++D.itrn;
+	c = n = i = 0;
+}
+
+DictIterObj.DictIterObj (SetObj *x)
+{
+	iteratorBase.ctor (x);
+	dereference D = &x->D;
+	++D.itrn;
+	c = n = i = 0;
+}
+__object__ *DictIterObj.xnext ()
+{
+	if_unlikely (n >= D.used) {
+		if (!c) {
+			c = 1;
+			--D.itrn;
+		}
+		RaiseStopIteration ();
+	}
+	++n;
+	register int i = i;
+	register dictEntry *tbl = D.tbl;
+
+	while (!tbl [i].val.o) ++i;
+	this->i = i + 1;
+	return i_th (&tbl [i]);
+}
+
+static class DictIterItemsObj : DictIterObj {
+	REFPTR tp;
+	__object__ *i_th (dictEntry*);
+	DictIterItemsObj (DictObj*);
+	void trv traverse ();
+};
+
+DictIterItemsObj.DictIterItemsObj (DictObj *x)
+{
+	DictIterObj.ctor (x);
+	tp.ctor (new Tuplen (&None, &None));
+}
+
+__object__ *DictIterItemsObj.i_th (dictEntry *ep)
+{
+	if (tp->refcnt == 1) {
+		tp.as_tuplen->__xsetitem__ (0, ep->key.o);
+		tp.as_tuplen->__xsetitem__ (1, ep->val.o);
+		return tp.o;
+	}
+	return newTuple (ep->key.o, ep->val.o);
+}
+
+static class DictIterValuesObj : DictIterObj {
+	__object__ *i_th (dictEntry *ep) { return ep->val.o; }
+};
+
+//////////////////////////////////////////////
+//////////// dictEntry methods ///////////////
+//////////////////////////////////////////////
+
+void dictEntry.copy (dictEntry *source)
+{
+	memcpy (this, source, sizeof *this);
+}
+
+/* ---------* DictObj *--------- */
+
+DictObj.DictObj ()
+{
+	__container__.ctor ();
+	D.ctor ();
+}
+
+void DictObj.__attrdict ()
+{
+	__container__.ctor ();
+	(*(dictionaryStrAlways*) &D).ctor ();
+}
+
+bool DictObj.contains (__object__ *o)
+{
+	return (&D)->contains (o);
+}
+
+__object__ *DictObj.pop (__object__ *o)
+{
+	return D.pop (o);
+}
+
+__object__ *DictObj.xgetitem (__object__ *o)
+{
+	return D.get (o) ?: RaiseKeyError (o);
+}
+
+__object__ *DictObj.xgetitem_noraise (__object__ *o)
+{
+	return D.get (o);
+}
+
+__object__ *DictObj.xgetitem_str (__object__ *o)
+{
+	return (*(dictionaryStrAlways*) &D).lookup_stri (o);
+}
+
+void DictObj.xdelitem (__object__ *o)
+{
+	D.remove (o);
+}
+
+void DictObj.xsetitem (__object__ *k, __object__ *v)
+{
+	D.insert (k, v);
+}
+
+__object__ *DictObj.setdefault (__object__ *k, __object__ *x)
+{
+	return D.setdefault (k, x);
+}
+
+void DictObj.xsetitem_str (__object__ *k, __object__ *v)
+{
+	(*(dictionaryStrAlways*) &D).insert_stri (k, v);
+}
+
+__object__ *DictObj.iter ()
+{
+	return new DictIterObj (this);
+}
+
+ListObj *DictObj.keys ()
+{
+	ListObj *L = new ListObj __sizector (D.used);
+	D.ins_keys (L);
+	return L;
+}
+
+ListObj *DictObj.values ()
+{
+	ListObj *L = new ListObj __sizector (D.used);
+	D.ins_vals (L);
+	return L;
+}
+
+ListObj *DictObj.items ()
+{
+	ListObj *L = new ListObj __sizector (D.used);
+	D.ins_itms (L);
+	return L;
+}
+
+dictEntry *DictObj.__iterfast (dictEntry *d)
+{
+	return D.__iterfast (d);
+}
+
+__object__ *DictObj.iteritems ()
+{
+	return new DictIterItemsObj (this);
+}
+
+__object__ *DictObj.itervalues ()
+{
+	return new DictIterValuesObj (this);
+}
+
+modsection __object__ *DictObj.min_max (int max)
+{
+	dictEntry *E = __iterfast (0);
+	if_unlikely (!E)
+		RaiseValueError ("min/max on empty dict");
+	__object__ *m = E->key.o;
+
+	if (max) {
+		while ((E = __iterfast (E)))
+			if (m->cmp_GEN (E->key.o) < 0)
+				m = E->key.o;
+	} else while ((E = __iterfast (E)))
+		if (m->cmp_GEN (E->key.o) > 0)
+			m = E->key.o;
+
+	return m;
+}
+
+void DictObj.update (DictObj U)
+{
+	for (dictEntry *E = 0; (E = U.__iterfast (E));)
+		(*this).xsetitem (E->key.o, E->val.o);
+}
+
+void dictionary.clear ()
+{
+	/* Not safe that the dict may not recusrively decref */
+	dtor ();
+	ctor (0);
+}

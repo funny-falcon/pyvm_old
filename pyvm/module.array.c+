@@ -1,0 +1,434 @@
+#include "dynlib.h"
+#include "arrayobj.h"
+
+/*
+ * Instead of subclassing 10 different objects for the different types
+ * of the array (and get 10 different object virtual tables which are
+ * big), we use another class, 'array_pure' and subclass that.
+ *
+ * The arrayObj has a pointer to the array_pure which is the polymorhpic
+ * array implementation. This way we can use auto-functions to inline
+ * virtuals in loops
+ *
+ */
+
+/* >>>>>>>>>>> iterator <<<<<<<<<<< */
+
+static class arrayIterObj : iteratorBase, seg_allocd
+{
+	int i;
+	array_pure *L;
+   public:
+	arrayIterObj (arrayObj*);
+	__object__ *xnext ();
+	int len ()	{ return L->n; }
+};
+
+arrayIterObj.arrayIterObj (arrayObj *x)
+{
+	iteratorBase.ctor (x);
+	L = x->P;
+	i = 0;
+}
+
+__object__ *arrayIterObj.xnext ()
+{
+	if_likely (i < L->n)
+		return L->_getitem (i++);
+	RaiseStopIteration ();
+}
+
+/*** Contained array object ***/
+
+/* abstract base class methods (mostly auto) */
+
+#define	val ((X*)ptr)
+
+static array_pure.array_pure ()
+{
+	ptr = 0;
+}
+
+static void array_pure.from_list (REFPTR *data, int len)
+{
+	ptr = __malloc ((n = alloc = len) * itemsize ());
+	setitems (data, len);
+}
+
+static void array_pure.from_string (const char *data, int l)
+{
+	memcpy (ptr = __malloc (l), data, l);
+	alloc = n = l / itemsize ();
+	if_unlikely (l % itemsize ())
+		RaiseNotImplemented ("error of some type: string not multiple of itermsize");
+}
+
+static void array_pure.of_size (int len)
+{
+	ptr = __malloc ((n = alloc = len) * itemsize ());
+}
+
+static void array_pure.__copy__ (array_pure *P)
+{
+	int size;
+
+	n = alloc = P->n;
+	ptr = __malloc (size = n * itemsize ());
+	memcpy (ptr, P->ptr, size);
+}
+
+static array_pure.~array_pure ()
+{
+	if (ptr)
+		__free (ptr);
+}
+
+void array_pure.print ()
+{
+	for (int i = 0; i < n; i++)
+		print_out (((X*) ptr) [i], ", ");
+}
+
+void array_pure.tolist (ListObj L)
+{
+	for (int i = 0; i < n; i++)
+		L.__xinititem__ (i, _getitem_nocache (i));
+
+}
+
+void array_pure._setitem (int i, __object__ *o)
+{
+	val [i] = obj2type (o);
+}
+
+void array_pure.setitems (REFPTR x[], int N)
+{
+	for (int i = 0; i < N; i++)
+		val [i] = obj2type (x [i].o);
+}
+
+/* --* two branches, one for integers and one for floats *-- */
+
+inline static class array_integer : array_pure {
+typedef	int Y;
+    public:
+	Y obj2type (__object__ *o)
+	{
+		if_likely (IntObj.isinstance (o))
+			return IntObj.cast (o)->i;
+		if (BoolObj.isinstance (o))
+			return BoolObj.cast (o)->i;
+		return (int) FloatObj.fcheckedcast (o)->f;
+	}
+	__object__ *_getitem (int);
+	__object__ *_getitem_nocache (int i)	{ return newIntObj (val [i]); }
+};
+
+
+static REFPTR Icache;
+
+__object__ *array_integer._getitem (int i)
+{
+	if_likely (Icache->refcnt == 1) {
+		Icache.as_int->i = val [i];
+		return Icache.o;
+	}
+	__object__ *o = newIntObj (val [i]);
+	if (!o->refcnt)
+		Icache = o;
+	return o;
+}
+
+static class array_real : array_pure {
+typedef	double Y;
+	Y obj2type (__object__ *o) { return o->todouble (); }
+	__object__ *_getitem_nocache (int i) { return new FloatObj (val [i]); }
+	__object__ *_getitem (int);
+};
+
+static REFPTR Fcache;
+
+__object__ *array_real._getitem (int i)
+{
+	if_likely (Fcache->refcnt == 1)
+		Fcache.as_double->f = val [i];
+	else
+		Fcache = new FloatObj (val [i]);
+	return Fcache.o;
+}
+
+/* specializations */
+
+static class array_int : array_integer {
+	int identifier = 'i';
+	typedef	int X;
+};
+static class array_short : array_integer {
+	int identifier = 'h';
+	typedef	short X;
+};
+static class array_byte : array_integer {
+	int identifier = 'c';
+	typedef	char X;
+	int obj2type (__object__*);
+};
+static class array_long64 : array_integer {
+	int identifier = 'l';
+	typedef	long long X;
+};
+static class array_float : array_real {
+	int identifier = 'f';
+	typedef	float X;
+};
+static class array_double : array_real {
+	int identifier = 'd';
+	typedef	double X;
+};
+
+int array_byte.obj2type (__object__ *o)
+{
+	if (!StringObj.isinstance (o))
+		return array_integer.obj2type (o);
+	if_unlikely (StringObj.cast (o)->len != 1)
+		RaiseTypeError ("array item must be char");
+	return StringObj.cast (o)->str [0];
+}
+
+////////////////////////////////////////////////////////////////////////////
+
+DictObj ArrayMethods __noinit ();
+const char ArrayType [] = "array";
+TypeObj ArrayTypeObj ctor (arrayObj._v_p_t_r_);
+
+static arrayObj.arrayObj ()
+{
+	P = 0;
+	__destructible__.ctor ();
+}
+
+static void arrayObj.create_array (int t) noinline
+{
+	switch (t) {
+		case 'c': case 'b': case 'B': P = new array_byte;
+		ncase 'h': case 'H': P = new array_short;
+		ncase 'i': case 'I': P = new array_int;
+		ncase 'l': case 'L': P = new array_long64;
+		ncase 'f': P = new array_float;
+		ncase 'd': P = new array_double;
+	}
+}
+
+static void arrayObj.init_array_list (int t, TupleObj *T)
+{
+	create_array (t);
+	P->from_list (T->data, T->len);
+}
+
+static void arrayObj.init_array_str (int t, StringObj *S)
+{
+	create_array (t);
+	P->from_string (S->str, S->len);
+}
+
+static void arrayObj.init_array_ptr (int t, void *ptr, int len)
+{
+	create_array (t);
+	P->from_string (ptr, len);
+}
+
+static void arrayObj.init_array_n (int t, int nn)
+{
+	create_array (t);
+	P->of_size (nn);
+}
+
+static inline int arrayObj.abs_index (int i)
+{
+	if_likely (i >= 0) {
+		if_likely (i < P->n)
+			return i;
+		RaiseIndexError ();
+	}
+
+	if ((i += P->n) >= 0)
+		return i;
+
+	RaiseIndexError ();
+}
+
+__object__ *arrayObj.xgetitem (__object__ *i)
+{
+	return P->_getitem (abs_index (IntObj.fcheckedcast (i)->i));
+}
+
+void arrayObj.xsetitem (__object__ *i, __object__ *v)
+{
+	P->_setitem (abs_index (IntObj.fcheckedcast (i)->i), v);
+}
+
+__object__ *arrayObj.xgetslice (int from, int to)
+{
+	int start = absl_index (from), cnt = absl_index (to);
+	if ((cnt -= start) < 0)
+		cnt = 0;
+	arrayObj *A = new arrayObj;
+	int its = P->itemsize ();
+	A->init_array_ptr (P->identifier, P->ptr + start * its, cnt * its);
+	return A;
+}
+
+int arrayObj.len ()
+{
+	return P->n;
+}
+
+__object__ *arrayObj.iter ()
+{
+	return new arrayIterObj (this);
+}
+
+void arrayObj.print ()
+{
+	print_out ("[");
+	P->print ();
+	print_out ("]");
+}
+
+arrayObj.~arrayObj ()
+{
+	if (P) delete P;
+}
+
+__object__ *arrayObj.tolist ()
+{
+	ListObj *L = new ListObj __sizector (len ());
+	L->len = len ();
+	P->tolist (L);
+	return L;
+}
+
+__object__ *arrayObj.tostring ()
+{
+	/* XXX: If REFCNT==1, we can steal the ptr? (problem is map()) */
+	int l = P->n * P->itemsize ();
+	char *__restrict ptr = seg_alloc (l + 1);
+
+	memcpy (ptr, P->ptr, l);
+	ptr [l] = 0;
+
+	return new StringObj allocated (ptr, l);
+}
+
+/* module */
+
+/* export function for converting a list to an array. Needed by JIT */
+
+bool is_array (__object__ *o)
+{
+	return arrayObj.isinstance (o);
+}
+
+__object__ *list_to_array (int type, TupleObj *T)
+{
+	arrayObj *A = new arrayObj;
+	REFPTR RA = A;
+	A->init_array_list (type, T);
+	return RA.Dpreserve ();
+}
+
+__object__ *array_to_list (__object__ *o)
+{
+	return arrayObj.cast (o)->tolist ();
+}
+
+__object__ *string_to_array (int type, StringObj *S)
+{
+	arrayObj *A = new arrayObj;
+	A->init_array_str (type, S);
+	return A;
+}
+
+__object__ *empty_array (int type, int n)
+{
+	arrayObj *A = new arrayObj;
+	A->init_array_n (type, n);
+	return A;
+}
+
+
+_module __object__ *new_array (REFPTR argv[], int argc)
+{
+	if (argc != 2)
+		RaiseNotImplemented ("Empty array");
+
+	if (IntObj.isinstance (argv [1].o))
+		return empty_array (StringObj.checkedcast (argv [0].o)->str [0],
+			argv [1].as_int->i);
+
+	if (StringObj.isinstance (argv [1].o))
+		return string_to_array (StringObj.checkedcast (argv [0].o)->str [0],
+			 argv [1].as_string);
+
+	return list_to_array (StringObj.checkedcast (argv [0].o)->str [0],
+			 TupleObj.checkedcast (argv [1].o));
+}
+
+static bltinfunc funcs [] = {
+	{ "array",	SETARGC (1, 2), new_array, 0 },
+	BSENTINEL
+};
+
+slowcold __object__ *import_array ()
+{
+	ArrayMethods.ctor (array_methods);
+	Icache.ctor (new IntObj (9999));
+	Fcache.ctor (new FloatObj (0.0));
+	return new ModuleObj BltinModule ("array", funcs);
+}
+
+//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+_module __object__ *copy_array (REFPTR argv[])
+{
+	arrayObj *Orig = arrayObj.cast (argv [0].o);
+	arrayObj *A = new arrayObj;
+	array_pure *P;
+
+	switch (Orig->P->identifier) {
+		default:
+		case 'c': case 'b': case 'B': P = new array_byte;
+		ncase 'h': case 'H': P = new array_short;
+		ncase 'i': case 'I': P = new array_int;
+		ncase 'l': case 'L': P = new array_long64;
+		ncase 'f': P = new array_float;
+		ncase 'd': P = new array_double;
+	}
+
+	(A->P = P)->__copy__ (Orig->P);
+
+	return A;
+}
+
+_module __object__ *tolist_array (REFPTR argv[])
+{
+	return arrayObj.fcheckedcast (argv [0].o)->tolist ();
+}
+
+_module __object__ *tostring_array (REFPTR argv[])
+{
+	return arrayObj.fcheckedcast (argv [0].o)->tostring ();
+}
+
+_module __object__ *cptr_array (REFPTR argv[])
+{
+	return new IntObj ((int) arrayObj.cast (argv [0].o)->P->ptr);
+}
+
+static const method_attribute array_methods [] = {
+	{ "__copy__",	"array.__copy__", SETARGC (1, 1), copy_array },
+	{ "tolist",	"array.tolist", SETARGC (1, 1), tolist_array },
+	{ "tostring",	"array.tostring", SETARGC (1, 1), tostring_array },
+	{ "cptr",	"array.cptr", SETARGC (1, 1), cptr_array },
+	/* fptr */
+	MSENTINEL
+};

@@ -1,0 +1,342 @@
+#include "dynlib.h"
+#include "py_opcodes.h"
+
+/*********************************************************************************
+
+	'Inf' object.
+	Inf supports numeric operations with integers, floats, bool and Inf.
+	All operations (+, -, *, /, %) on Inf return Inf.
+	Inf is > than any other object!
+	it is infinite!
+
+	(what about negative infinity)
+
+	Inf could have been implemented in python, but it'd require
+	serious and well-working operator overloading machinery.
+
+*********************************************************************************/
+
+static TypeObj InfTypeObj;
+
+static final class InfObj : __permanent__
+{
+	const char *const stype = IntType + 10;
+	const TypeObj &type = &InfTypeObj;
+    public:
+	InfObj ()			{ __permanent__.ctor (); }
+	long hash ()			{ return 0x123; }
+	bool Bool ()			{ return true; }
+	int cmp_GEN (__object__*);
+	bool cmp_EQ (__object__ *o)	{ return o == this; }
+	StringObj *str ()		{ return Interns.Inf; }
+	StringObj *repr ()		{ return Interns.Inf; }
+	void print ()			{ print_out (STRL ("Inf")); }
+
+	__object__ *binary_add (__object__*);
+
+	__object__ *binary_multiply (__object__ *o) { return binary_add (o); }
+};
+
+static TypeObj InfTypeObj ctor (InfObj._v_p_t_r_);
+
+static InfObj Inf;
+
+int InfObj.cmp_GEN (__object__ *o)
+{
+	if (o == &Inf) return 0;
+	return 1;
+}
+
+static void InfOK (__object__ *o)
+{
+	if_unlikely (!(o->vf_flags & VF_NUMERIC) && o != &Inf)
+		RaiseTypeError ("Inf can't operate on this (not implemented?)");
+}
+
+__object__ *InfObj.binary_add (__object__ *o)
+{
+	InfOK (o);
+	return &Inf;
+}
+
+
+/*****************************************************************************
+	evalconst (s)
+
+	takes a string and evaluates it as a lexical literal, which can
+	be: string, raw string, hex int, octal int, int, floating point
+******************************************************************************/
+
+extern __object__ *py_escape (const char*, int);
+
+static __object__ *evalconst (REFPTR argv[])
+{
+	StringObj *s = argv [0].check_string ();
+	char *c = s->str;
+	int len = s->len;
+	if (c [0] == 'r') {
+		char q = c [1];
+		if (c [2] == q && c [3] == q)
+			return new StringObj binctor (c + 4, len - 7);
+		return new StringObj binctor (c + 2, len - 3);
+	}
+	if (c [0] == '"' || c [0] == '\'') {
+		char q = c [0];
+		if (c [1] == q && c [2] == q)
+			return py_escape (c + 3, len - 6);
+		return py_escape (c + 1, len - 2);
+	}
+	if (strchr (c, '.')) isfloat:
+		return new FloatObj (strtod (c, 0));
+	if (c [0] == '0' && in2 (c [1], 'x', 'X'))
+		return newIntObj (strtol (c, 0, 16));
+	if (strchr (c, 'e') || strchr (c, 'E')) goto isfloat;
+	return newIntObj (strtol (c, 0, c [0] == '0' ? 8 : 10));
+}
+
+/*****************************************************************************
+	decompose_short, and friends. Should belong to DLL or sys?
+	compose integers from chars/shorts, signed/unsigned
+
+	1) can do C signdness correctly
+	2) it's fast
+*****************************************************************************/
+
+union decompose_s
+{
+	int x;
+	struct {
+		short int s1, s2;
+	};
+	struct {
+		char c1, c2, c3, c4;
+	};
+};
+
+_module __object__ *decompose_short (REFPTR argv[])
+{
+	union decompose_s D;
+	D.x = argv [0].check_int ()->i;
+	return new Tuplen (newIntObj (D.s1), newIntObj (D.s2));
+}
+
+_module __object__ *decompose_iTc (REFPTR argv[])
+{
+	union decompose_s D;
+	D.x = argv [0].check_int ()->i;
+	return new Tuplen (newIntObj (D.c1), newIntObj (D.c2), newIntObj (D.c3), newIntObj (D.c4));
+}
+
+/* xxxx: perhaps it should take as argument a tuple/array/list with the 4 values, and not 4 args */
+_module __object__ *compose_iFc (REFPTR argv[])
+{
+	union decompose_s D;
+	D.c1 = argv [0].check_int ()->i;
+	D.c2 = argv [1].check_int ()->i;
+	D.c3 = argv [2].check_int ()->i;
+	D.c4 = argv [3].check_int ()->i;
+	return newIntObj (D.x);
+}
+
+/************************************************************************************
+	The wildcard object.
+
+	This object is equivalent to the python class:
+
+		class wildcard:
+			def __init__ (self, f):
+				self.__eq__ = f
+			def hash (self):
+				raise Unhashable
+
+	And can be used to take advantage of 'in' and 'list.index',
+	'list.count', etc to provide something like fast and flexible
+	regular expressions for lists/tuples/iterators.
+	For instance,
+
+		W = wildcard (lambda x: type (x) is str)
+		W in [1, 2, 3, 'matches', 4, 5]
+		[1, 2, 3, 'indexofthis', 4, 5].index (W)
+
+	Additionaly, in here we can optimize some things with
+	inlined code from a db of frequently used wildcards.
+
+XXXXX:	Doesn't really do what we'd like. Investigate JITting of lambdas.
+
+************************************************************************************/
+
+typedef bool (*wfunc) (__object__*, __object__*);
+
+static DictObj wildcardMethods __noinit ();
+static const char wildcardType [] = "Wildcard";
+static TypeObj wildcardTypeObj;
+
+static class wildcardObj : __container__
+{
+	const char *const stype = wildcardType;
+	const TypeObj &type = &wildcardTypeObj;
+	DictObj *type_methods = &wildcardMethods;
+
+	REFPTR tp;
+	wfunc w;
+	void study_codeobj (PyCodeObj);
+	bool cmp_EQ (__object__*);
+   public:
+	wildcardObj (__object__*);
+	void print ()	{ print_out ("wildcard context"); }
+	void traverse ()	{ tp.traverse_ref (); }
+};
+
+static TypeObj wildcardTypeObj ctor (wildcardObj._v_p_t_r_);
+
+wildcardObj.wildcardObj (__object__ *lambda)
+{
+	w = 0;
+	tp.ctor (lambda);
+	if (PyFuncObj.isinstance (lambda)) {
+		PyFuncObj *F = PyFuncObj.cast (lambda);
+		if (db_dict.as_dict->contains (F->codeobj.as_code->code.o))
+			study_codeobj (F->codeobj.as_code);
+if (0&& !w) {
+	F->codeobj.as_code->disassemble ();
+	pprint (F->closures.o);
+}
+	}
+}
+
+bool wildcardObj.cmp_EQ (__object__ *o)
+{
+	if (w)
+		return this->w (this, o);
+
+	REFPTR arg = o;
+	tp->call (arg, &arg-1, 1);
+	arg = preempt_pyvm (CtxSw.vm);
+	return BoolObj.isinstance (arg.o) ? arg.o == &TrueObj : arg->Bool ();
+}
+
+//****************************************************************************
+//
+// the db of precompiled wildcards
+//
+//****************************************************************************
+
+enum {
+	DB_TYPE_CMP
+};
+
+static byte typecmp1 [] = {
+	/* if the names[0]=='type'
+	 * this is "lambda x: type (x) is <names[2]>"
+	 */
+	LOAD_GLOBAL, BYTEARG (0),
+	LOAD_FAST, BYTEARG (0),
+	CALL_FUNCTION, BYTEARG (1),
+	LOAD_GLOBAL, BYTEARG (2),
+	COMPARE_OP, BYTEARG (8),
+	RETURN_VALUE
+};
+
+static bool wildcardObj.typecmp (__object__ *o)
+{
+	return (__object__*) &o->type == tp.o;
+}
+
+static bool typecmp_wf (__object__ *w, __object__ *o)
+{
+	return wildcardObj.cast (w)->typecmp (o);
+}
+
+static void init_db () noinline;
+static REFPTR db_dict;
+static void init_db ()
+{
+	DictObj *D;
+	db_dict = D = new DictObj;
+	D->GC_ROOT ();
+	D->xsetitem (new StringObj binctor ((char*) typecmp1, sizeof typecmp1), newIntObj (DB_TYPE_CMP));
+}
+
+static __object__ *wildcardObj.LOADGLOBAL (__object__ *n)
+{
+	DictObj *g = tp.as_func->GLOBALS.as_dict;
+	return g->xgetitem_noraise (n) ?: __builtins__.as_ns->__dict__.as_dict->xgetitem_noraise (n);
+}
+
+void wildcardObj.study_codeobj (PyCodeObj C)
+{
+	int tt = IntObj.cast (db_dict.as_dict->xgetitem (C.code.o))->i;
+	Tuplen *T = C.names.as_tuplen;
+	__object__ *o;
+
+	switch (tt) {
+	case DB_TYPE_CMP:
+		if (T->__xgetitem__ (0) == Interns.type) {
+			o = LOADGLOBAL (T->__xgetitem__ (2));
+			if (o && TypeObj.isinstance (o)) {
+				w = typecmp_wf;
+				tp = o;
+			}
+			return;
+		}
+	}
+}
+
+
+__object__ *wildcard (REFPTR argv[])
+{
+	once init_db ();
+	return new wildcardObj (argv [0].o);
+}
+
+/*
+ *		thread_status
+ *
+ * just print all the Tasks and what's their status
+ * : RUNNING, BLOCKING, SOFT_BLOCKING
+ *
+ */
+
+extern int NGIL ();
+
+__object__ *thread_status ()
+{
+	int i = 0, j = 0;
+	for (Task *T = RALL; T; T = T->_next, i++)
+	if (T->state == TH_BLOCKED) {
+		pprint ("Task:", T->ID, __enumstr__ (TH_STATUS, T->state), "(thread", T->PID, ")");
+		++j;
+	} else
+		pprint ("Task:", T->ID, __enumstr__ (TH_STATUS, T->state));
+	pprint ("Total light threads:", i, "threads, ", j, "blocking");
+	pprint ("Total OS threads:", NGIL() + j, "(", NGIL(), "in the pool)");
+	return &None;
+}
+
+//
+//****************************************************************************
+//
+
+#include "fya.c+"
+
+/* module */
+
+static bltinfunc funcs [] = {
+	{ "wildcard",		SETARGC (1, 1), wildcard, 0 },
+	{ "thread_status",	0, thread_status, 0 },
+	{ "faryield",		SETARGC (1, 1), faryield, 0 },
+	{ "StopFarIteration",	SETARGC (0, 0), StopFarIteration, 0 },
+	{ "evalconst",		SETARGC (1, 1), evalconst, 0 },
+	{ "decompose_short",	SETARGC (1, 1), decompose_short, 0 },
+	{ "compose_iFc",	SETARGC (4, 4), compose_iFc, 0 },
+	{ "decompose_iTc",	SETARGC (1, 1), decompose_iTc, 0 },
+	BSENTINEL
+};
+
+slowcold __object__ *import_pyvm_extra ()
+{
+	ModuleObj *ns = new ModuleObj BltinModule ("pyvm_extra", funcs);
+	ns->AddAttributes (("far_yield_acceptor", fyaFunc));
+	ns->setattr (Interns.Inf, &Inf);
+	return ns;
+}

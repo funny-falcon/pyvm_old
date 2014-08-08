@@ -1,0 +1,11 @@
+vim syntax coloring for epl source code.
+
+The basic file is epl.vim which should be
+copied to /usr/share/vim/.../syntax/
+and then you should edit /usr/share/vim/.../filetype.vim
+and add the .pe extension.
+
+This may not work right away. Some operators are highlighted
+and some are plain white. If you are on a virtual terminal
+console you can also try out mycolors.vim, which in combination
+with epl.vim will give you the best visual effect.

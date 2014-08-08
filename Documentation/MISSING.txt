@@ -1,0 +1,184 @@
+
+Missing Features
+================
+
+pyvm is missing some very basic stuff.  Some of them are to be implemented
+but have a lower priority, while others will probably not.  The skeleton
+of pyvm is mostly complete though.
+
+
+* opcodes:
+
+	Not all opcodes of 2.4 have been implemented, only what was needed
+	to run the testcases.  Implementing the rest is easy but will be
+	done when we encounter testcases that fail.
+
+* modules:
+
+	Since the C API of pyvm is different, some very important builtin
+	modules are missing, like [ 'pickle', 'sockets', 'expat' ].  Also, from
+	the implemented modules several functions are missing.  From the
+	implemented functions, not all functionallity is there.
+
+* Unicode:
+
+	Not Implemented. Low Priority.
+
+* Infinite digit numbers (long):
+
+	long numbers are TBI.  However, there is a question on whether there
+	should be automatic conversion from int -> long when arithmetic
+	operations overflow.  On the one hand, this feature is a good sign
+	of a high level programming language.  On the other hand, most cases
+	have no use for arbitary length integers; 32-bits are enough for
+	most algorithms (proof: 64-bits CPUs were delayed so much).  Most
+	cases that require long integers are mathematical algorithms where
+	we already know in advance that we will need such numbers.  Should
+	everybody else tolerate the overhead of long <--> int conversion ?
+
+	A possible scenario is to implement long() and require the
+	programmer to explicitly ask for longs.  Once a number is long
+	it remains long forever (or until converted to int()).
+
+	(also there are programs what need C arithmetic. TonyJPEGEncoder
+	was broken with long numbers)
+
+* OOP:
+
+	New style classes have not been invented yet (time machine).
+	'object' exists but it's just an empty class.  We do not have
+	__mro__, descriptors, slots, and __new__.  metaclasses
+	have never been attempted. 
+
+* operator overloading:
+
+	User defined classes can only overload the operators:
+	__{set|get|del}item__, __{set|get|del}attr__, __call__,
+	__iter__ and next.  The other operators are not exposed yet.
+	The builtin module 'operator' does not exist.  TBI.
+	(actually, set/del-attr is not there in this release)
+
+* complex numbers:
+
+	Low priority.  Complex numbers are a convenient representation of
+	problems that helps us apply transformations, but the end result
+	is usually calculated with good old real numbers.  We don't use
+	complex numbers to count things!
+
+* weakrefs:
+
+	Low priority.  There was no need for them so far.  If we need weakrefs
+	perhaps we should rethink our design?
+
+	There are two kinds of systems:
+	1) systems where each object is aware of its parent
+	2) systems where there is one global root object and each
+	object can be located in logarithmic time.
+
+	Our world is type '2' system. (irrelevant?)
+
+* Tracebacks and frames:
+
+	The vm context is not an object. It looks very much like one and
+	we could make it an object, but that is a major surgery of the vm
+	and we also need numbers that prove it's worth it. The noticable
+	problem is that exceptions cannot report tracebacks (actually
+	pyvm can be compiled with TRACEBACK_LEVEL=2 to generate a tb
+	on each exception but that's dog slow).
+
+* Print >>:
+
+	Print to another destination is supported only if the code is
+	compiled with the pyc compiler which will transform this statement
+	to use the builtin function __print_to__().
+	Standard Error is reserved by pyvm for it's internal debugging
+	messages in this release.
+
+* Dict:
+
+	In python: D[3.0]==D[3]
+	That does not happen in pyvm.
+
+* iteration with __getitem__:
+
+	N/A.  Unpythonic?
+
+* slice 'stride':
+
+	Strides are too rare to deserve to be builtins and get their
+	own special syntax. The most frequent use case of strides used
+	to be -1 but that's not required any more since we have reversed().
+	Today with generators, if we need every second element from a
+	list we can say:
+
+		def every_second (x):
+		    f = True
+		    for i in x:
+			if f: yield i
+			f = not f
+
+	and use that instead of lst [::2].  There is no plan to complicate
+	the entire vm with list strides.  This means that 'slice objects'
+	and ellipsis are also gone.
+
+* import hooks:
+
+	N/A
+
+* Bytecode Hacks:
+
+	Not possible.  pyvm uses some intermediate data which should
+	be updated if the bytecode is modified.  Not done yet.
+
+* Printing binary:
+
+	At the moment, when pyvm's "print" has to print something
+	not printable, it will output a dot '.' instead.  For ex,
+		print "\01HI\200"
+	prints  ".HI."
+	repr() on the other hand should work.
+
+* Subclass builtin types:
+
+	N/A. Subclassing builtins is like operator overloading and
+	it has more chances to be abused, rather do something which
+	would not be possible with good old functions. Lower priority.
+
+---------------------------------------------------------------------
+
+Deprecations:
+
+	We want pyvm to be small and embedable. This is a good 
+	oportunity to deprecate some things.
+
+
+* enumerate:
+
+	enumerate can only handle lists and tuples as a fast builtin.
+	For any other case use izip(count(), iterable)
+
+---------------------------------------------------------------------
+
+NEW STUFF:
+
+* set del
+
+	Sets have delitem.  'del S [x]' for a set is the same as
+	S.remove (x)
+
+* tuple has index() and count()
+
+	Needed in javascript VM. Really. Tuples take less size
+	and are faster to iterate (and tuple slices are views in pyvm).
+	index() and count() don't hurt their immutability.
+
+* unyield
+
+	Generators have a method 'unyield'. When called it will rewind
+	the program counter of the generator with the result of
+	re-yielding the previous value the next time it's called.
+
+	unyield can only go one value back. If the generator has terminated
+	it will remain terminated (raise StopIteration when called).
+	If the generator hasn't started yet, nothing will happen.
+	TODO: add unyield to other iterators as well?

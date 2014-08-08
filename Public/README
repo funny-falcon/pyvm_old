@@ -1,0 +1,18 @@
+This is mirroring of the pyc files of Lib.
+
+Don't remember why I did it.
+
+It looks neat but if you modify a .py file from Lib it
+WILL NOT be automatically recompiled.
+
+Hmmm.
+
+Advantages:
+
+1. the pyc compiler is supposed to be optional and consequently
+   python syntax too. pyvm cares about pyc-files. Public provides
+   abstraction.
+2. Lib is the development directory and has other .pyc files
+   (testcases, scripts, programs, etc). Standard library users
+   shouldn't have access to these.
+3. It's cleaner to freeze pyvm (pyvm binary + interesting pycs).

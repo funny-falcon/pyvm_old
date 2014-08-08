@@ -1,0 +1,118 @@
+The diff vs webpy 1.2
+
+    --- web.py      2006-01-06 21:09:14.000000000 +0200
+    +++ web2.py     2006-01-20 16:11:30.543423888 +0200
+    @@ -14,7 +14,7 @@
+     #   - provide an option to use .write()
+
+     import cgi, re, os, os.path, sys, time, urllib, urlparse, pprint, traceback, types, Cookie
+    -from threading import currentThread
+    +from threading import currentThread, Semaphore
+     try:
+         from Cheetah.Compiler import Compiler
+         from Cheetah.Filters import Filter
+    @@ -189,11 +189,14 @@
+             print ' '*2, str(k)+':', v
+
+     class threadeddict:
+    -    def __init__(self, d): self.__dict__['_threadeddict__d'] = d
+    -    def __getattr__(self, a): return getattr(self.__d[currentThread()], a)
+    -    def __getitem__(self, i): return self.__d[currentThread()][i]
+    -    def __setattr__(self, a, v): return setattr(self.__d[currentThread()], a, v)
+    -    def __setitem__(self, i, v): self.__d[currentThread()][i] = v
+    +    def __init__(self, d): self.__dict__['d__d'] = d
+    +    def __getattr__(self, a):
+    +       return getattr(self.__dict__ ['d__d'][currentThread()], a)
+    +    def __getitem__(self, i): return self.__dict__ ['d__d'][currentThread()][i]
+    +    def __setattr__(self, a, v):
+    +       return setattr(self.__dict__ ['d__d'][currentThread()], a, v)
+    +    def __setitem__(self, i, v):
+    +       self.__dict__ ['d__d'][currentThread()][i] = v
+    
+     ## url utils
+
+    @@ -921,7 +924,7 @@
+         # http://www.xfree86.org/3.3.6/COPYRIGHT2.html#5
+
+         import SimpleHTTPServer, SocketServer, BaseHTTPServer, urlparse
+    -    import sys, logging, socket, errno
+    +    import sys, socket, errno
+         import traceback
+
+         class WSGIHandler (SimpleHTTPServer.SimpleHTTPRequestHandler):
+    @@ -954,6 +957,7 @@
+                 self.wsgiSentHeaders = 0
+                 self.wsgiHeaders = []
+    
+    +            time.sleep (0.3)   # human delay factor. weed out bots!
+                 try:
+                     # We have there environment, now invoke the application
+                     result = self.server.app(env, self.wsgiStartResponse)
+    @@ -977,12 +981,13 @@
+                 if (not self.wsgiSentHeaders):
+                     # We must write out something!
+                     self.wsgiWriteData(" ")
+    +           self.server.sem_post ()
+                 return
+    
+             do_POST = runWSGIApp
+    
+             def do_GET(self):
+    -            if self.path.startswith('/static/'):
+    +            if self.path.startswith('/static/') and False:
+                     SimpleHTTPServer.SimpleHTTPRequestHandler.do_GET(self)
+                 else:
+                     self.runWSGIApp()
+    @@ -1009,10 +1014,27 @@
+                 self.wfile.write (data)
+    
+         class WSGIServer (SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer):
+    -        def __init__(self, func):
+    +        def __init__(self, func, MAXCLIENTS=3):
+                 BaseHTTPServer.HTTPServer.__init__(self, ("0.0.0.0", int(port)), WSGIHandler)
+                 self.app = func
+                 self.serverShuttingDown = 0
+    +           SEM = Semaphore (MAXCLIENTS)
+    +           self.sem_wait, self.sem_post= SEM.acquire, SEM.release
+    +       # robustification hacks
+    +       # 1: allow no more than MAXCLIENTS threads
+    +       # 2: set a timeout on the socket
+    +       # 3: set maxlen for the POST method (the way cgi module allows
+    +       #       this is not very good). When it happens an
+    +       #       exception is raised from cgi and the person gets an
+    +       #       internal server error.
+    +       def serve_forever (self):
+    +            while 1:
+    +               self.handle_request ()
+    +               self.sem_wait ()
+    +       def verify_request (self, request, client_addr):
+    +               request.settimeout (3)
+    +               return True
+    +       cgi.maxlen = 50000
+    
+         print "Launching server: http://0.0.0.0:"+str(port)+"/"
+         WSGIServer(func).serve_forever()
+    @@ -1033,10 +1055,12 @@
+    
+     ## debug
+    
+    -def debug(*args):
+    -    for x in args:
+    -        print >> context.environ['wsgi.errors'], pprint.pformat(x)
+    -    return ''
+    +class debug:
+    +    def __call__(self, *args):
+    +        for x in args:
+    +            print >> context.environ['wsgi.errors'], pprint.pformat(x)
+    +        return ''
+    +debug = debug()
+
+     # has to be a lambda so the context is evaluated at runtime
+     debug.write = lambda x: context.environ['wsgi.errors'].write(x)
+
+notes:
+
+*  in pyvm we can't add attributes to functions. `debug` is a class.
+*  it seems that `threadeddict` uses the *pseudo-private* methods. This is not serious access control. Not implemented by the `pyc` compiler.
+*  Added TIMEOUT, MAXCLIENTS and MAXPOSTLENGTH to the http server.
+

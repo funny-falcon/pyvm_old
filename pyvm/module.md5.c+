@@ -1,0 +1,100 @@
+#include "libmd5.h"
+#include "dynlib.h"
+
+/* MD5 Object */
+
+static DictObj MD5Methods __noinit ();
+static const char MD5Type [] = "md5";
+static TypeObj MD5TypeObj;
+
+static
+class MD5Obj : __destructible__
+{
+	const char *const stype = MD5Type;
+	const TypeObj &type = &MD5TypeObj;
+	DictObj *type_methods = &MD5Methods;
+
+	MD5_CTX CTX;
+   public:
+	MD5Obj ();
+	void update (StringObj*);
+	StringObj *digest ();
+	void print ()	{ print_out ("MD5 context"); }
+};
+
+static TypeObj MD5TypeObj ctor (MD5Obj._v_p_t_r_);
+
+MD5Obj.MD5Obj ()
+{
+	MD5Init (&CTX);
+}
+
+void MD5Obj.update (StringObj *S)
+{
+	MD5Update (&CTX, (unsigned char*) S->str, S->len);
+}
+
+StringObj *MD5Obj.digest ()
+{
+	unsigned char *tmp = seg_alloc (17);
+	MD5Final (tmp, &CTX);
+	tmp [16] = 0;
+	return new StringObj allocated ((char*)tmp, 16);
+}
+
+extern void _hexlify (unsigned char*, const unsigned char*, int);
+
+StringObj *MD5Obj.hexdigest ()
+{
+	unsigned char tmp [16];
+	MD5Final (tmp, &CTX);
+	unsigned char *hex = seg_alloc (33);
+	_hexlify (hex, tmp, 16);
+	hex [32] = 0;
+	return new StringObj allocated ((char*) hex, 32);
+}
+
+static __object__ *update_md5 (REFPTR argv[])
+{
+	MD5Obj.cast (argv [0].o)->update (StringObj.checkedcast (argv [1].o));
+	return &None;
+}
+
+static __object__ *digest_md5 (REFPTR argv[])
+{
+	return MD5Obj.checkedcast (argv [0].o)->digest ();
+}
+
+static __object__ *hexdigest_md5 (REFPTR argv[])
+{
+	return MD5Obj.checkedcast (argv [0].o)->hexdigest ();
+}
+
+static const method_attribute md5_methods [] = {
+	{"update",	"md5.update", SETARGC (2, 2), update_md5},
+	{"digest",	"md5.digest", SETARGC (1, 1), digest_md5},
+	{"hexdigest",	"md5.hexdigest", SETARGC (1, 1), hexdigest_md5},
+	MSENTINEL
+};
+
+/* module */
+
+static __object__ *new_md5 (REFPTR argv[], int argc)
+{
+	if (!argc)
+		return new MD5Obj;
+	MD5Obj *M = new MD5Obj;
+	M->update (argv [0].check_string ());
+	return M;
+}
+
+static bltinfunc funcs [] = {
+	{ "new",	SETARGC (0, 1), new_md5, 0 },
+	BSENTINEL
+};
+
+slowcold __object__ *import_md5 ()
+{
+	MD5Methods.ctor (md5_methods);
+	return new ModuleObj BltinModule ("md5", funcs);
+}

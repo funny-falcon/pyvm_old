@@ -1,0 +1,552 @@
+pyc 1.2
+=======
+
+* Part of pyvm. Lots of new stuff
+
+pyc 1.0
+=======
+
+* Changes:
+   print >>
+	printing to streams with '>>' is implemented without using the PRINT_ITEM_TO
+	opcode.  Instead we emit bytecode that converts:
+		print >> x, "hello"
+	to:
+		tmp = x.write
+		tmp ("hello")
+		tmp ("\n")
+
+pyc 0.8
+=======
+
+* Changes:
+  'with' from 2.5:
+	pyc implements with-statement from PEP 343. An example of 'with' for
+	the uninitiated:
+		class Locker:
+		    def __context__ (self):
+			return self
+		    def __enter__ (self):
+			print "ENTER THE LOCK"
+		    def __exit__ (self, e, v, t):
+			print "RELEASE LOCK", e, v, t
+
+		Locker = Locker () # if it's a singleton...
+
+		with Locker:
+		    print 123
+		with Locker:
+		    print 123
+		    raise "see what happens"
+
+  Bugfix:
+	In "X=x and''or's'" X got the value True/False instead of ''/'s'
+
+  Bugfix:
+	better calculation of stacksize.
+
+  Line-numbers:
+	worse calculation of line-numbers. pycodegen has been modified to emit
+	SETUP_LINENO at different opcodes and there are cases where the exceptions
+	do not report very accurate line numbers. This is to be gradually fixed
+	as we see such cases.
+
+  Paths:
+	The filename of code object is set to the absolute path of the source file.
+
+  REAL_GLOBAL:
+	Inspired from mwh's patch for python.
+
+  Scopes:
+	the scope analyser runs before the AST optimizer.  Therefore in,
+		def foo():
+		    if 0:
+			x = 1
+			yield 2
+		    print x
+	we know that 'foo' is a generator and that 'x' is a local variable,
+	despite the fact that the body of the if-statement is eliminated.
+
+  return:
+	'return' not allowed at module level.
+
+  Faster:
+	many improvements and cleanups to make pyc faster.  Unbelievably, at the
+	moment pyc is just 3-4 times slower than Python's internal compiler!
+
+* Optimizations:
+  regexp optimizations:
+	The bytecode optimizer is using a regular expression based scanner to detect
+	optimizable opcode patterns.
+
+	A powerful feature in 'no-dynlocals' mode is independent variable analysis.
+		-``If between two STOREs of a local variable there is no LOAD for it,
+		   we replace the first STORE with a POP_TOP.'' (not in a try-block!)
+		-``If for every basic block that there is a LOAD of a local variable
+		   there is a STORE of the same variable before it, the variable is
+		   declared independent.  An idependent variable does not need to
+		   supply a value for use outside its basic block.''
+
+	With these optimization, pystone get a 3% speedup when compiled in --no-dynlocals.
+	Also, '-O3' is a synonym for '--no-dynlocals' and in the future will enable any
+	optimizations that mess up debugging.
+
+  SETUP_LOOP
+	We do not emit a SETUP_LOOP/POP_BLOCK for loops that don't contain
+	a 'break'.  This is good in general (pystone + 2%).
+
+  LIST_APPEND
+	there is a simple type analysis.  in the future pyc may emit type information
+	which could be used by the vm/JIT compilers to execute more efficient code.
+	At the moment this type analysis is used to take advantage of the LIST_APPEND
+	opcode in the cases we know that a local variable is a list and its 'append'
+	attribute is called.  Like in:
+
+		def f():
+		    x = []
+		    x.append (2)
+
+	which will be done with a LIST_APPEND instead of LOAD_ATTR -> CALL_FUNCTION -> POP_TOP.
+	(389 times in the standard library)
+
+   UNARY_NOT elimination:
+	pyc does a better job removing UNARY_NOT opcodes from boolean
+	expressions used in jumps.  For example in:
+
+		if a and not b and c:
+
+	it will generate bytecode without UNARY_NOT.
+	(we still miss some cases)
+
+   Conditional:
+	pyc uses the "conditional expression" at the AST level (there is an AST node for
+	conditional expressions but no grammar for it).  Some if-else statements that assign
+	to the same variables are converted to conditional expressions, like:
+		if cond:
+		    x = expr1
+		else:
+		    x = expr2
+
+	will be converted to (AssName ('x'), Conditional (cond, expr1, expr2)).
+	The good thing about this is that the variable 'x' can be studied and
+	removed by the optimizer in cases like:
+		def foo(c):
+		    if c<0: x = 1
+		    elif c>0:
+			if c>100: x = 100
+			else: x = 200
+		    else: x = 2
+		    print x
+
+	where the function 'foo' doesn't have a local variable 'x' and all is
+	done on the stack in -O3.  (329 times in the standard library)
+
+   in-list:
+	If after the 'in' there is a list it's converted to a tuple,
+		for i in [1,2,3]:
+		    if i in [1,2,3]:
+
+	is converted to:
+		for i in (1,2,3):
+		    if i in (1,2,3):
+
+	at AST level.
+
+  Reverse Rot Optimization:
+	The command-line option '--rrot3' notifies pyc that the virtual machine prefers
+	a 'ROT2-ROT3-ROT2' sequence over a 'LOAD_FAST' or a STORE-LOAD pair.
+
+	The generated ROTs may be removed/rearranged by other optimizations
+	and even local variables can disappear in no-dynlocals mode.
+
+	However, if no other optimization happens, the three ROTs are slower than
+	the STORE/LOAD pair in CPython.  By the way, we would like to propose the
+	implementation of a new opcode with id '6', named RROT_THREE which is the
+	oposite of ROT_THREE:  ROT_THREE->RROT_THREE = no-op
+
+* New Features:
+  eval-AST:
+	pyc provides a function 'eval_ast'.  This implements the same functionality
+	as the builtin eval() function but the evaluation happens on the AST nodes
+	without the generation of bytecode objects.  At the moment this is about
+	4-6 times slower than CPython's builtin eval(), but this is not a bad number
+	because we can speed up the startup time of the parser in 'eval' mode.
+	eval_ast may need to call eval (compiled_code_object) for list comprehensions.
+	[-incomplete-]
+
+  Runtime Constants Decorator:
+	pyc implements a magic function decorator, '__pyc_closures__'. What happens
+	is that the arguments to this pseudo decorator are installed in the function
+	as closures.  Consequently, with __pyc_closures__ we can install runtime
+	constants into functions, with the value an expression will have at the time
+	of the function definition.  For example,
+
+		class A:
+		    x = 1
+
+		@__pyc_closures__ (A.x)
+		def foo (x):
+		    return A.x+x
+
+	This shall be converted by pyc at AST level to:
+
+		def CoNsTiFiCaTiOn0 ():
+		    ClOsUrE0__ = A.x
+		    def foo (x):
+			return ClOsUrE0__+x
+		    return foo
+		foo = CoNsTiFiCaTiOn0 ()
+
+	Here, instead of computing 'A.x' each time foo is called, 'A.x' is calculated
+	once at the time of the function definition and afterwards referenced from the
+	outer-scope variable.
+
+	Obviously that increases the code size of the module (a lot) so constants should
+	be used only for functions where speed really matters. A benchmark:
+
+		class A:
+		    x = 1
+		def bench ():
+		    def foo (i):
+			"""pyc::constants
+			A.x"""
+			return A.x+i
+		    for i in xrange (5000000):
+			bar ()
+		from time import time
+		t0 = time()
+		bench ()
+		print time()-t0
+
+	Without the constification that's 2.66sec and with it's 2.51.
+	Not a very big deal. It's suggested to use this rarely only when you'd do
+	something like that anyway. This feature is backwards compatible. We can
+	define an empty do-nothing decorator for the case the program isn't compiled
+	with pyc,
+
+		def __pyc_closures__ (*args):
+			return lambda x:x
+
+  Constants: (suggested by Ikkei Shimomura)
+	This is the command-line option '--constants-file=xx.py'.  When enabled
+	the file xx.py is imported and all its names found in __all__ that are marshallable
+	(int,float,string,tuple-of-marshallable) are embedded into the generated bytecode
+	as constants.  For example, the constants file could be:
+
+		# myconsts.py
+		from math import pi
+		pi2 = 2 * pi
+		__DEBUG__ = 0
+		__all__ = ['pi', 'pi2', '__DEBUG__']
+
+	And the program:
+
+		# real file compiled with --constants-file=myconsts.py
+
+		try:	# see that pi exists.
+		    pi
+		except:	# the case the file is not compiled with pyc
+		    from myconsts import *
+
+		print pi, pi2, pi2/3.0
+		if __DEBUG__:
+		    print "This code will be removed"
+
+	The advantages are that (1) LOAD_CONST is much faster than LOAD_GLOBAL,
+	(2) that myconsts need not be imported if we check that the name 'pi'
+	exists, and therefore that doesn't add crap to the namespace and
+	(3) pyc can do constant folding propagation on these constants (for example,
+	'pi2/3.0' is computed at compile-time)
+
+	The disadvantage is that now we have dependencies and if the constants file
+	is modified the program has to be recompiled.  This is rather un-dynamic;
+	pyc will emit code at the beginning of the module which compares the mtime
+	of the constants file when the module was compiled vs. the mtime of the
+	constants file when the module is executed.  If these two differ a DependencyError
+	is raised (actually a RuntimeError).  To avoid the emission of this code
+	use the --no-mtime option.
+
+	pyc itself is using the --constants-file feature which gives about 2% speedup
+	to the parser!
+
+  Marshal Builtins:
+	The command line option --marshal-builtin, has the effect that pyc will turn some
+	selected objects from the __builtins__ ('len', 'isinstance', 'getattr', 'list', etc),
+	to constants.  Currently Python 2.4.x cannot marshal/unmarshal builtin functions so
+	this option SHOULD NOT BE USED.
+
+	Rationale:  Ok, why marshal just from the __builtins__?  Wouldn't a generic
+	mechanism to generate constants at runtime be better (and btw more generic)?
+	Well, yes.  We can do that already.  The way to setup a function's constants
+	at runtime is by instead of dumping a <code object>, dump the parameters
+	we should pass to 'new.code' and create the code object at runtime.
+	However, this method has two disadvantages:
+		(1) that it increases the size of the bytecode.  And that is not good
+		because for some high level functions we don't care about the cost of
+		the lookup in GLOBALS->__builtins__
+		(2) if we can turn anything into a constant, we should be able to
+		constify global functions from our modules, etc.  So here we need
+		new syntax to have this feature.  (one possibility would be declare
+		constants like global variables "constant x, y").  But that is an
+		entirely other story that needs a PEP and more thinking.
+	Whilst, with marshal-builtins, there is absolutely zero cost in all this and
+	the __builtins__ can be considered constant and embedded everywhere.
+
+	Another point of view is to think of the __builtins__ as operators;
+	for example, 'len' ``is an operator that gets the length of an object'',
+	much like the 'sizeof' operator in C.
+
+	Currently pyvm is using this feature (because it doesn't have a builtin compiler
+	and speed matters), and pyc gets a 3% speedup when compiled with marshalled
+	__builtins__.  When the marshaller sees something it can't handle it looks
+	for it in the values of the __builtins__ dictionary.  If there, it will dump
+	the marhsal code 'B' followed by a string which is the key name of the builtin.
+
+pyc 0.7
+=======
+
+* Bugfix:
+
+	The routine that computes the stacksize is completely broken in the compiler.
+	Sometimes it may report that a function needs a stacksize of 25 while it actually
+	needs a stacksize of 4!
+
+	This has a severe impact in the performance.  The vm has to allocate/free all the
+	extra unused stack space and for that reason the code produced by pyc-0.5/0.6
+	is slow bytecode.
+
+	This has been fixed with the new stack depth finder.  However, if there is
+	a bug in the stack depth finder and it calculates *less* stacksize than the
+	correct value that will crash the interpreter (real segfault).
+
+	Please test.
+
+* Optimization(1):
+
+	pyc converts ROT_TWO followed by two STORE_FAST, and ROT_THREE followed by
+	three STORE_FAST to code that doesn't need the ROT_ by rearranging the STOREs.
+	This happens all the time when packing/unpacking tuples.  For example in:
+
+		a,b,c = d,e,f
+
+	without this optimization the generated code is:
+		LOAD_FAST (d)
+		LOAD_FAST (e)
+		LOAD_FAST (f)
+		ROT_THREE
+		ROT_TWO
+		STORE_FAST (a)
+		STORE_FAST (b)
+		STORE_FAST (c)
+
+	and with the optimization:
+		LOAD_FAST (d)
+		LOAD_FAST (e)
+		LOAD_FAST (f)
+		STORE_FAST (c)
+		STORE_FAST (b)
+		STORE_FAST (a)
+
+	Theoretically, the STORE_FAST opcode does not have any side effects so it's
+	safe to reorder it.  In practice it could have some side effects if people
+	depend on __del__ methods called at the right time.  However it is wrong to
+	depend on __del__ side effects.  If python had true GC __del__ methods would
+	be deferred for much later anyway.
+
+	ToDo: also for ROT_FOUR. Currently we don't use ROTs for pack/unpack with
+	more that 3 values because 3 rots may not be faster that BUILD_TUPLE/UNPACK_SEQ
+	if the optimization does not succeed. So we should only do this if all four
+	values at the left side are (local) names.
+
+* Optimization(2):
+
+	pyc converts:
+		STORE_FAST (i)
+		LOAD_FAST (i)
+	to:
+		DUP_TOP
+		STORE_FAST (i)
+
+	This happens all the time for example in:
+
+		for i in x:
+		    if i:
+			something...
+
+	In the toplevel directory of the standard library this happens 2062 times!
+
+* Optimization(3): (no-dynlocals)
+
+	Variable life analysis.
+
+	This optimization is used to avoid storing values to unused variables,
+	for instance in:
+
+		def f ():
+		    for i, j in bar():
+			print i
+
+	where 'j' is unused and we should avoid storing a value to it. The rationale is:
+	``If for a local variable there are STORE_FAST opcodes but no LOAD_FAST opcodes
+	it is safe to replace the STORE_FAST with POP_TOP''.  Also a POP_TOP after a DUP_TOP
+	results in both opcodes removed.
+	This pass has many use cases after optimization(2).
+
+	However, this optimization is not enabled by default because:
+
+	1) Local variables may disappear and that may make debugging more difficult.
+
+	2) this is not 100% safe.  If the function calls 'locals()' or 'dir()'
+	pyc does not do this and it keeps all the STOREs.  There is still a way to
+	fool pyc and produce broken code:
+
+		foobar = locals
+		def f():
+		    for i, j in bar():
+			zoo (i, foobar ())
+
+	where 'j' will be missing from the dictionary passed to zoo and caboom!
+
+	For this reason, the optimization must be enabled with the option
+	'dynlocals=False' to compile() and '--no-dynlocal' to pyc.py,
+	for users that are sure that locals() and dir() are the only ways
+	to access a function's local variables indirectly.
+
+* Optimization: (no-dynlocals)
+
+	Intra-block optimization.
+
+	``If a basic block (B1) ends with: LOAD_FAST (x), JUMP_IF_FALSE/JUMP_IF_TRUE
+	    or: DUP_TOP, STORE_FAST (x), JUMP_IF_FALSE/JUMP_IF_TRUE
+
+	and the next basic block (B2) starts with: POP_TOP, LOAD_FAST (x)
+
+	and B1->B2 is the only entry to B2, it is safe to remove the two
+	first instructions of B2''.
+
+	This happens for example in:
+
+		for i in x:
+		    if i:
+			i()
+
+	which normally has the assembly:
+		FOR_ITER
+		STORE_FAST (i)
+		LOAD_FAST (i)
+		JUMP_IF_FALSE
+		POP_TOP
+		LOAD_FAST (i)
+		CALL_FUNCTION 0
+		POP_TOP
+
+	and when the opt is enabled:
+		FOR_ITER
+		JUMP_IF_FALSE
+		CALL_FUNCTION 0
+		POP_TOP
+
+* Optimization:
+
+	we convert:
+		not a and not b and not ... -> not (a or b or ...)
+		not a or not b or not ... -> not (a and b and ...)
+
+	at ast level at optimizer.visitEarlyTerminator()
+
+pyc 0.6
+=======
+
+* Optimization:
+
+	pyc removes any jump instructions after RETURN, RAISE, BREAK and
+	CONTINUE in a basic block.  The compiler package and CPython-2.4's
+	internal compiler emit a JUMP to the next basic block at the end of
+	each basic block without checking such an unconditional exit.
+
+	Implemented at pyassem.py/flattenGraph()
+
+* Intern strings:
+
+	Python-2.4 converts all string constants whos characters are all
+	alphanumeric to intern strings.  For example, in:
+
+		def foo ():
+		    print "Ok"
+		def bar ():
+		    print "Ok"
+
+	"Ok" is converted to an intern string when the code object of foo
+	is loaded.  On the other hand, the compiler saves string constants
+	as normal strings.
+
+	pyc, detects such string constants at compile-time and saves them
+	as interns anyway.  This is the Right Thing because multiple
+	occurences of intern strings are compressed.
+
+* Optimization:
+
+	pyc removes code after Return/Raise/Break/Continue at the AST level.
+	This is different from optimization (1), which just avoids emitting
+	a couple of jumps internally.  This optimization removes unreachable
+	statements.  For example, in:
+
+		def foo ():
+		    if True:
+			return 1
+		    print "UNREACHABLE"
+
+	the function is tranformed at AST level to:
+
+		def foo ():
+		    return 1
+
+	Implemented at optimizer.py/FoldConstVisitor.visitStmt()
+
+* Assignments are expressions:
+
+	In python assignments are statements and that means that they can't
+	be nested in expressions.  pyc implements this addition to the language.
+	To enable, pass the keyword argument 'assignexpr=True'
+	to the compile() function.  Alternatively, the function
+	compileFile() which is used by the pyc.py frontend will set this
+	option if the extension of the file is '.py2'.
+
+	The good thing about expression assignments is that except from
+	compressing the code, they can be used to write more efficient code
+	since the result of the assignment is already on a register.
+	For example, where we would write:
+
+		def foo (self):
+		    self.x += 1
+		    return self.x
+
+	which has two attribute lookups we can say:
+
+		def foo (self):
+		    return self.x += 1
+
+	which has only one.
+
+	Some more examples:
+
+		x = 1 + (y = 2)
+		while x=get_foo ():
+		    pass
+		if x = a < b < c:
+		    pass
+		return x += 1
+		-(x=foo())
+		# without parenthesis this is keyword arg of course
+		foo ((x = bar()))
+
+	Unfortunatelly, assignments are not allowed in subscripts because
+	there is a conflict with the 'extended slice notation' and we
+	don't know how to parse:
+
+		x [1:2:x,y=y,x:2:1]	# !
+
+	For now, we can write:
+
+		x [(y=1)]
+		x [(y=1):(z=-1)]

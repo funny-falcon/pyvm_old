@@ -1,0 +1,187 @@
+#include "config.h"
+#include "dynlib.h"
+
+/*
+** import statement is one of the most complex parts in the
+** python specification. Here is what happens,
+**
+** All import statements either get stuff from sys.modules or
+** find-load-execute and insert stuff to sys.modules. Additionally
+** they store something to a variable.
+**
+** The lookup procedure is to first look for a file in the same
+** directoty as the file that requested the import and then in
+** the directories of sys.path in order.
+** In the case of a 'sub-module' sys.path isn't used.
+**
+** But there is more! From inside a package Foo, "import Bar"
+** is the same as "import Foo.Bar" (the entry 'Foo.Bar' is added to sys modules)
+**
+** 1) import Foo
+**	This is the same as "import Foo as Foo"
+**	If 'Foo' doesn't exist in sys.modules
+**		a) find the file
+**		b) create a new dictionary and store it to sys.modules ['Foo']
+**		c) execute the code of Foo.py or Foo/__init__.py with
+**		   the dictionary of (b) as globals()
+**	DO:
+**	 Foo = sys.modules ['Foo']
+**
+** 2) import Foo.Bar
+**	if 'Foo' doesn't exist in sys.modules execute step (1- "import Foo") but w/o
+**	storing the dictionary to a global variable 'Foo'.
+**	Then
+**		a) find the sub-module Bar in the directory of Foo.
+**		b) create a new dictionary and store it to sys.modules ['Foo.Bar']
+**		c) execute Bar.py or Bar/__init__.py with the dictionary of
+**		   (b) as globals()
+**	DO:
+**	 Foo = sys.modules ['Foo']; Foo.Bar = sys.modules ['Foo.Bar']	(!!!!)
+**
+** 3) import Foo.Bar as Zoo
+**	Same as (2) but instead
+**	DO:
+**	  Zoo = sys.modules ['Foo'].Bar = sys.modules ['Foo.Bar']	(!!!)
+**
+** 4) From Foo import Bar
+**	Perform "import Foo" but don't store to a global variable "Foo".
+**	DO:
+**	 try:
+**		Bar = sys.modules ['Foo']['Bar']
+**	 except KeyError:
+**		import Foo.Bar as Bar				(!!!!!!!!)
+**
+** 5) From Foo.Bar import Zoo as Pak
+**	Brain raises exception.
+**
+ */
+
+extern ModuleObj *get_current_module ();
+extern REFPTR modpath;
+
+static bool needs_recompile (char *pyc, char *py)
+{
+	bool ret = false;
+	filedes fd (pyc, O_RDONLY, false, false);
+
+	if (fd.type != FD_BAD) {
+		long pycheader [2];
+		if (fd.read (pycheader, sizeof pycheader) == sizeof pycheader) {
+			struct stat buf;
+			lstat (py, &buf);
+			if (!in3 (pycheader [0], MAGIC, MAGIC23, MAGIC_PYVM)
+			 || pycheader [1] != buf.st_mtime)
+				ret = true;
+		}
+	}
+
+	return ret;
+}
+
+static int module_in (const char *dir, const char *module, char path [], bool recompile)
+{
+#define	access fs_access
+#define joined(B,D,F) strcat (strcpy (B, D), F)
+#define jaccess(B,D,F) fs_access (joined (B,D,F), R_OK)
+
+	char BASE [1024], PATH2 [1024];
+
+	if (strlen (dir) + strlen (module) > 1000)
+		return 0;
+
+	strcpy (BASE, dir);
+	rindex (BASE, '/') [1] = 0;
+	strcat (BASE, module);
+
+	if (!jaccess (path, BASE, ".pyc")) {
+		if (recompile && (!jaccess (PATH2, BASE, ".py") ||
+		    !jaccess (PATH2, BASE, ".pe")))
+			if (needs_recompile (path, PATH2)) {
+				strcpy (path, PATH2);
+				return 2;
+			}
+		return 1;
+	}
+	if (!access (strcat (strcpy (path, BASE), "/__init__.pyc"), R_OK)) {
+		// XXX: recompile __init__.pe
+		if (recompile && !access (strcat (strcpy (PATH2, BASE), "/__init__.py"), R_OK))
+			if (needs_recompile (path, PATH2)) {
+				strcpy (path, PATH2);
+				return 2;
+			}
+		return 1;
+	}
+	if (!recompile)
+		return 0;
+	if (!jaccess (path, BASE, ".py"))
+		return 2;
+	if (!jaccess (path, BASE, ".pe"))
+		return 2;
+	if (!jaccess (path, BASE, "/__init__.py"))
+		return 2;
+	if (!jaccess (path, BASE, "/__init__.pe"))
+		return 2;
+
+	return 0;
+}
+
+/*
+ * If the current code object's module is not a TOPLEVEL module,
+ * look in the same directory as the module.
+ *
+ * The filename is returned in path[] which must be long enough.
+ * return value is 0: import error, 1: it's a pyc, 2: it's a py,
+ * 3: it's a submodule which shoulda've been imported with dots.
+ */
+int import_find_file (const char *module, char path[], bool recompile)
+{
+	int r;
+	char tmp [strlen (module) + 1], *p;
+
+	strcpy (tmp, module);
+
+	while ((p = strchr (tmp, '.')))
+		*p = '/';
+
+	ModuleObj *M = get_current_module ();
+	if (M != &None && M->mtype != MTYPE_TOPLEV) {
+		if (module_in (M->pyc_path.as_string->str, module, path, recompile)) {
+			if (M->mtype == MTYPE_INIT) {
+				sprintf (path, "%s.%s", M->module_name.as_string->str, module);
+			} else {
+				strrchr (strcpy (path, M->module_name.as_string->str), '.') [1] = 0;
+				strcat (path, module);
+			}
+			return 3;
+		}
+	}
+
+	for (int i = 0; i < modpath.as_list->len; i++) {
+		__object__ *o = modpath.as_list->__xgetitem__ (i);
+		if (StringObj.isinstance (o)) {
+			StringObj *S = StringObj.cast (o);
+			if (S->str [S->len - 1] != '/') {
+				// it's possible that the user has appended
+				// entries to sys.modules that don't end in '/'
+				char fixup [S->len + 3];
+				S = new StringObj (strcat (strcpy (fixup, S->str), "/"));
+				modpath.as_list->__xsetitem__ (i, (__object__*) S);
+			}
+			if ((r = module_in (S->str, module, path, recompile)))
+				return r;
+		}
+	}
+
+	return 0;
+}
+
+/*
+ * Load a submodule.
+ */
+int import_submodule (const char *module, char path[], const char *package, bool recompile)
+{
+	char tmp [strlen (module)];
+
+	strcpy (tmp, rindex (module, '.') + 1);
+	return module_in (package, tmp, path, recompile);
+}

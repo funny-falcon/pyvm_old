@@ -1,0 +1,10 @@
+This is a rewrite of python's tkinter.c in python using the DLL
+module to wrap libtcl. We also need "tcl.h" in order to extract
+values from structures using code compiled at runtime using DLL.
+
+This works only for non-threaded tcl 8.4
+
+Other versions/systems will need extra hacking.
+
+This version was written to test the proof of concept of the
+DLL module for wrapping libraries: it works!

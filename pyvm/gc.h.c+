@@ -1,0 +1,546 @@
+/*
+ * Garbage collection (mop the floor and put the dirt under the carpet)
+ *
+ * The current collection works by trying to break cycles.
+ * First we traverse the object space.  Then we walk the list of
+ * containers looking for objects that weren't marked reachable.
+ * When such an object is encountered, we call its __clean function
+ * which is responsible for empyting the object: that is throw away
+ * "all" the things contained in the container.  That should eventually
+ * break cycles and consequently unreachable objects should start to
+ * disappear from the containers list.
+ * "all" tries to be somewhat intelligent.  For instance, in the case
+ * of an instance, we empty the attribute __dict__ but we do not empty
+ * the __class__ slot.  If the circle is between class and instance, then
+ * the unreachable class should also be on the container list and the
+ * instance will be released when the class's __clean empties the class's
+ * __dict__.
+ *
+ * There *may* be weird cases that escape the collection.
+ * On the other hand circular references do happen rather often when
+ * we try to optimize attribute access.  So the point is to catch
+ * all normal cases of circular references which *should* be allowed.
+ *
+ * ``A clever adversary could prevent objects from being collected''
+ * -- but the programmer is not our "enemy" here so we have no interest
+ * to "protect" our vm from such incidents.
+ *
+ * __del__: This approach may free instances with __del__ methods!
+ * If the circular reference is between two instances I1 and I2 and I2
+ * has a __del__ method but I1 is before I2 in the container list, then
+ * __clean on I1 shall break the cycle and I2 will be properly released
+ * and its __del__ method will be called.  Although that may be invalid
+ * if the __del__ of I2 expects an non-empty I1 to perform its job.
+ * For now we don't care.  If that ever happens (rare and possibly a bad
+ * practice), an exception will be raised and the programmer will know.
+ *
+ * The only case this garbage collector can't handle is I1 <--> I2 and
+ * when both instances have __del__ methods.
+ *
+ * Also note that __del__ zombies are not called during GC. They are
+ * normally placed in the graveyard and will be invoked later by the
+ * scheduler.
+ *
+ */
+
+#ifdef	DEBUG_GC
+int _debug_traverse = 1;
+#endif
+
+extern void gc_interns ();
+extern void reset_GC_params ();
+
+void weakref_collect ()
+{
+	gc_interns ();
+	sys_modules.as_dict->D.clean_weak_vals ();
+}
+
+void GC_collect (REFPTR root)
+{
+	if (0) {
+		pprint (COLS"*"COLE COLB"GARBAGE COLLECTION"COLE);
+		whereami ();
+	}
+
+	__container__ *c, *p;
+	for (c = GCFirst; c; c = c->next)
+		c->sticky &= ~STICKY_TRAVERSE;
+
+#ifdef	DEBUG_GC
+	pprint ("Begin traversing");
+	pprint ("~~~~~~~~~~~~~~~~");
+#endif
+	init_vv ();
+	root.traverse_ref ();
+	restore_vv ();
+
+	char ALTFirst [sizeof (__container__) + 8];
+	__container__ *ALTList = (__container__*) ALTFirst;
+	ALTList->next = 0;
+
+	/* XXX: The list is in reverse creation order.
+	**/
+	c = GCFirst;
+	while (c)
+		if_likely (c->sticky & STICKY_TRAVERSE)
+			c = c->next;
+		else {
+			p = c->prev ?: 0;
+			c->__remove_from_GC ();
+
+			c->prev = ALTList;
+			if ((c->next = ALTList->next))
+				ALTList->next->prev = c;
+			ALTList->next = c;
+
+	/* the undef'd thing below is the "right thing". Two passes.
+	 * we should:
+	 *   Not put object with NO_GC_BREAK on the unreachable-list
+	 *   Scan the unreachable list for instances with del methods.
+	 *	if found, put to the graveyard and traverse the instance
+	 *   Then and only then start cleaning the list
+	 */
+#if 0
+c = p->next;
+}
+
+//pprint ("ALT:");
+//for (c = ALTList->next; c; c = c->next)
+//pprint (">>>>>", OCC c, c->refcnt, "\n");
+
+for (;;)
+{
+for (c = ALTList->next; c; c = c->next)
+if (!(c->sticky & STICKY_TRAVERSE)) {
+//pprint ("feer:", OCC c);
+	c->sticky |= STICKY_TRAVERSE;
+	c->__clean ();
+	continue 2;
+}
+break;
+}
+
+if (ALTList->next)
+pprint ("Still have more leftovers");
+for (c = ALTList->next; c; c = c->next)
+{
+pprint ("<<<<", c->stype, c->refcnt, "\n");
+if (DynInstanceObj.isinstance (OCC c))
+	pprint (DynInstanceObj.cast (OCC c)->__class__.o);
+}
+exit (1);
+#else
+			c->__clean ();
+			c = p ? p->next : GCFirst;
+		}
+#endif
+
+#if 1
+	/* WE HAVE LEFTOVERS means that either we leak references (bad)
+	 * / or that we have failed to traverse EVERYTHING (not very bad)
+	 * / or that our __clean functions are unable to break the cycles.
+	 * We will get this warning for circular references between objects
+	 * with __del__ methods, but ain't seen any such things so far.
+	 */
+	if (ALTList->next) {
+		pprint ("WE HAVE LEFTOVERS");
+//pprint (OCC ALTList->next);
+//whereami ();
+//CRASH;
+	}
+#endif
+
+	reset_GC_params ();
+}
+
+/*
+ */
+
+static inline trv void traverse_array (REFPTR *x, int n)
+{
+	while (n--)
+		x++->traverse_ref ();
+}
+
+static Task *gcTask;
+
+/* Singleton used to start traversal of the vm contexts and all the co-routines */
+void ContextSwitchObj.traverse ()
+{
+	_tb.traverse_ref ();
+#ifdef	DMCACHE
+	DMcache.traverse_ref ();
+#endif
+	gcTask = RC;
+	pvm->traverse_vm ();	/* redundant? */
+
+	for (gcTask = RALL; gcTask; gcTask = gcTask->_next)
+		gcTask->traverse_task ();
+	/* Independent roots */
+	devnull.traverse_ref ();
+	Graveyard.traverse_ref ();
+}
+
+/*
+ * if vm_contexts where objects we would ensure no re-traversal
+ * with the generic traverse_ref() function.  Now we have to keep
+ * a list of visited vm_contexts, use their 'cloned' field and then
+ * restore its old value.
+ */
+
+static void **vv;
+static int vvi, vva;
+
+static void init_vv ()
+{
+	vv = __malloc ((vva = 100) * sizeof *vv);
+	vvi = 0;
+}
+
+static void restore_vv ()
+{
+	for (int i=0; i < vvi; i++)
+		((vm_context*) vv[i])->cloned &= ~(2|4);
+	__free (vv);
+}
+
+static inline bool valid_ctx (vm_context *v)
+{
+	/* Note: to make the vm faster.
+	 */
+	return vm_context_allocator.is_allocated (v);
+}
+
+void vm_context.traverse_vm (int active=1)
+{
+	/* Traversing vm_contexts.
+	 * There are two cases where we will have to traverse a context (stack+locals).
+	 * (1) when we are in the active call chain. In this case we also traverse the
+	 * vm of the 'caller' context down to 0. This starts from the 'pvm' current context.
+	 * (2) when we have a generator object. A generator is nothing more than a frozen
+	 * vm context. However in the case of generator we don't traverse the vm of the
+	 * caller because a caller may not exist. We can traverse upwards to vm contexts
+	 * of generators that are found in the stack/local.
+	 *
+	 * To understand this better. Currently python has 'distance 1' generators;
+	 * where a call flow in a signle threaded program normally goes:
+	 *	main() --> foo() --> bar() --> zoo ()
+	 * The addition of generators to the language allows us to do things like:
+	 *	main() --> foo() --> bar() --> zoo()
+	 *                  ^                   ^
+	 *                  |-generator1()      |-generator2 ()        
+	 *                        ^
+	 *                        |-generator3()
+	 *
+	 */
+	if (!valid_ctx (this))
+		return;
+
+	int vbit = 1 << (1+active);
+	if (cloned & vbit) return;
+	if (FUNC.o == &None) {
+		if (this != pree) return;
+		if (!gcTask || !gcTask->pctx || !gcTask->pctx->v) return;
+
+		/*
+		 * using the preempt-link
+		 */
+#if 1
+		preempt_link *pctx = gcTask->pctx;
+		gcTask->pctx = pctx->outer;
+		pctx->v->traverse_vm ();
+		gcTask->pctx = pctx;
+#else
+		gcTask->pctx->v->traverse_vm ();
+#endif
+		return;
+	}
+
+	if_unlikely (vvi == vva)
+		vv = __realloc (vv, (vva *= 2) * sizeof *vv);
+	vv[vvi++] = this;
+
+	cloned |= vbit;
+	S.traverse_stack ();
+	traverse_array (fastlocals, FUNC.as_func->nfast);
+	FUNC.traverse_ref ();
+	if (active && caller) caller->traverse_vm ();
+}
+
+void exec_stack.traverse_stack ()
+{
+	traverse_array (STACK, maxTOS);
+}
+
+void Task.traverse_task ()
+{
+	if (this != RC)
+		vm->traverse_vm ();
+}
+
+void NamespaceObj.traverse ()
+{
+	__dict__.traverse_ref ();
+}
+
+void DynInstanceObj.traverse ()
+{
+	__dict__.traverse_ref ();
+	__class__.traverse_ref ();
+}
+
+void DynClassObj.traverse ()
+{
+	__dict__.traverse_ref ();
+	__bases__.traverse_ref ();
+	__getattr__.traverse_ref ();
+	__setattr__.traverse_ref ();
+	__del__.traverse_ref ();
+}
+
+void DynMethodObj.traverse ()
+{
+	__self__.traverse_ref ();
+	__method__.traverse_ref ();
+}
+
+void DynStaticMethodObj.traverse ()
+{
+	__callable__.traverse_ref ();
+}
+
+void DynClassMethodObj.traverse ()
+{
+	__callable__.traverse_ref ();
+}
+
+void PyCodeObj.traverse ()
+{
+	consts.traverse_ref ();
+	names.traverse_ref ();
+	//names.ptraverse_ref ();
+	varnames.ptraverse_ref ();
+	freevars.ptraverse_ref ();
+	cellvars.ptraverse_ref ();
+	module.traverse_ref ();
+}
+
+void PyFuncObj.traverse ()
+{
+	codeobj.traverse_ref ();
+	LOCALS.traverse_ref ();
+	GLOBALS.traverse_ref ();
+	closures.traverse_ref ();
+}
+
+void PyFuncObj_dflt.traverse ()
+{
+	PyFuncObj.traverse ();
+	default_args.traverse_ref ();
+}
+
+void PyGeneratorFuncObj.traverse ()
+{
+	GTOR.traverse_ref ();
+}
+
+void PyGeneratorObj.traverse ()
+{
+	vm->traverse_vm (0);	/* inactive */
+}
+
+void TupleObj.traverse ()
+{
+#ifdef	TUPLEVIEW
+	if (Tuplen.isinstance ((__object__*) this) && Tuplen.cast ((__object__*)this)->tview)
+		(*(REFPTR*)&Tuplen.cast ((__object__*)this)->tview).traverse_ref ();
+	else
+#endif
+	traverse_array (data, len);
+}
+
+void iteratorBase.traverse ()
+{
+	obj.traverse_ref ();
+}
+
+void dictionary.traverse_dict ()
+{
+	test_resize ();
+	dictEntry *tbl = tbl;
+
+	if (dictionary.IsType (this)) {
+		for (long i = used; i > 0; tbl++)
+			if (tbl->val.o) {
+				tbl->key.traverse_ref ();
+				tbl->val.traverse_ref ();
+				--i;
+			}
+	} else
+		for (long i = used; i > 0; tbl++)
+			if (tbl->val.o) {
+				tbl->val.traverse_ref ();
+				--i;
+			}
+}
+
+void dictionary.traverse_set ()
+{
+	test_resize ();
+	dictEntry *tbl = tbl;
+
+	if (dictionary.IsType (this))
+		for (long i = used; i > 0; tbl++)
+			if (tbl->val.o)
+				tbl->key.traverse_ref (), --i;
+}
+
+void DictObj.traverse ()
+{
+	D.traverse_dict ();
+}
+
+void SetObj.traverse ()
+{
+	D.traverse_set ();
+}
+
+void DictIterItemsObj.traverse ()
+{
+	tp.traverse_ref ();
+	DictIterObj.traverse ();
+}
+
+void PropertyObj.traverse ()
+{
+	fset.traverse_ref ();
+	fget.traverse_ref ();
+	fdel.traverse_ref ();
+}
+
+/*
+ * The __clean method.  It exists for containers and it will empty
+ * the container from all the data it references.  Releasing some
+ * data may very possibly do a circle and result in the release of
+ * the container, so we keep the data in temporary storage.
+ */ 
+
+void __container__.__clean ()
+{
+//print ("NO CLEANER:", (__object__*)this, NN);
+//	print ((__object__*)this, NN);
+//	RaiseNotImplemented ("No __clean for this type of object");
+}
+
+void NamespaceObj.__clean ()
+{
+	/* __dict__ is also on the list, so this is redundant */
+	__dict__.as_dict->__clean ();
+}
+
+void Tuplen.__clean ()
+{
+	/* That would be needed if we had a tuple directly containing itself.
+	 * But since that is impossible, a circular reference will have to go
+	 * through a some other container.  So we'll leave to the __clean of others
+	 * to release unreachable tuples
+	 */
+}
+
+void ListObj.__clean ()
+{
+	REFPTR *_data = data;
+	int _len = len, _alloc = alloc;
+
+	data = seg_alloc ((alloc = len = 1) * sizeof *data);
+	data [0].ctor ();
+
+	/* cannot use 'this' any more! */
+	for (int i = 0; i < _len; i++)
+		_data [i].dtor ();
+	seg_free (_data, _alloc * sizeof *data);
+}
+
+dictionary.dictionary (dictionary *D)
+{
+	memcpy (this, D, sizeof *D);
+	if (D->tbl == D->smalltbl)
+		tbl = smalltbl;
+}
+
+void DictObj.__clean ()
+{
+	dictionary _D (&D);
+	D.ctor (0);
+}
+
+void DynMethodObj.__clean ()
+{
+	REFPTR _self __movector (__self__);
+	__method__.breakref ();
+}
+
+void DynInstanceObj.__clean ()
+{
+	if (delmethod ())
+		/* actually this is wrong! We should: scan the list of
+		 * unreachable objects for instances with __del__ methods,
+		 * add those instances to the graveyard and retraverse them
+		 * so everything they reference becomes reachable. That should
+		 * be done before we get here. XXXXXX
+		 */
+		return;
+
+	/* don't release __class__, because it's needed in order to lookup __del__
+	   circular references of the form : 'class -> instance -> class' will be
+	   broken when we __clean the class (if unreachable)  */
+
+	/* ACTUALLY: If the instance is unreachable, so will its __dict__.
+	 * So there is no need to clean the dict. Maybe we should put the
+	 * dict out of the to-clean list if we have delmethod instead.
+	 */
+//pprint ("garbage collected instance:", (void*) this, __class__.o);
+//	__dict__.c->__clean ();
+}
+
+void PyCodeObj.__clean ()
+{
+	REFPTR _MoDuLe __movector (module);
+	consts.breakref ();
+}
+
+void SetObj.__clean ()
+{
+	dictionary _D (&D);
+	D.ctor (0);
+}
+
+void PyFuncObj.__clean ()
+{
+	if (codeobj.as_code->nclosure && codeobj.as_code->self_closure != -1) {
+		REFPTR tmp = (__object__*) this;
+		closures.as_tuplen->data [codeobj.as_code->self_closure] = &None;
+		if (tmp->refcnt == 1)
+			return;
+	}
+	GLOBALS.breakref ();
+}
+
+void PyFuncObj_dflt.__clean ()
+{
+	REFPTR _dflt __movector (default_args);
+	PyFuncObj.__clean ();
+}
+
+void DynClassObj.__clean ()
+{
+	__dict__.c->__clean ();
+}
+
+void PropertyObj.__clean ()
+{
+	fset.setNone ();
+	fget.setNone ();
+	fdel.setNone ();
+}

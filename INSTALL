@@ -1,0 +1,50 @@
+DEPENDENCIES
+============
+
+* gcc > 3.3
+
+The only dependency to build the toolchain is a recent
+version of gcc (> 3.3).  The source code of pyvm is using
+GNU-C extensions similar to those used in the linux kernel.
+There may be small problems with other gcc versions; you
+can either fix lwc or just download recent gcc and be done.
+
+(note: if you decide to download/install gcc, you'll only
+need the C frontend. Read Documentation/INSTALLING-GCC for
+how to install a small gcc without messing up the system's
+default compiler)
+
+* Python 2.3 or 2.4
+
+We also need python 2.4/2.3 in order to use programs that import
+stuff from the standard library.  Right now the bootstrap procedure
+needs the `os` module, so python is a must.  This can be avoided in
+the future but Python is generally useful for developers because
+it can help us reset if we break the bootstrap.
+
+
+BUILDING
+========
+
+On a x86/Linux system type 'make'.
+On cywgin type 'make cygwin'.
+
+64-bit systems "just don't work".
+On anything else, type 'make' and try to fix it :)
+
+
+INSTALL (wait!)
+===============
+At the current state pyvm does not install. 
+Everything will remain in this directory (the "pyvm home
+directory").  Once bytecode files have been generated
+it's not a good idea to move this directory around.
+
+So before 'make', make sure you like the current location
+of this directory.  A good place is $HOME/pyvm
+
+Only the executables "pyvm" and "lwc" will be copied to
+your ~/bin when the installation is done.
+
+using pyvm means hacking it and this is the most convenient
+installation for developers.

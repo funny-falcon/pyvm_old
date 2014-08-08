@@ -1,0 +1,8 @@
+The files markdown.py and web.py are GPL.
+Distribution is subject to the terms and conditions of
+the GNU General Public License.
+
+* web.py is written by Aaron Swartz <http://webpy.org>
+* markdown.py is written by Yuri Takhteyev <http://www.freewisdom.org>
+* Cookie.py is based on python's standard library Cookie.py and
+  is written by Timothy O'Malley

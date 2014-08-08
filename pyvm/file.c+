@@ -1,0 +1,271 @@
+#include "dynlib.h"
+
+static DictObj FileMethods __noinit ();
+static const char FileType [] = "file";
+static TypeObj FileTypeObj;
+
+#define USE_MMAP
+
+static final class FileObj : iteratorBase
+{
+	const char *const stype = FileType;
+	const TypeObj &type = &FileTypeObj;
+	DictObj *type_methods = &FileMethods;
+
+	REFPTR fnm;
+
+#ifdef	USE_MMAP
+	char *mm_start;
+	int mm_ptr, mm_len, mm_fd;
+#endif
+
+	filedes FD;
+	FDin *Fi;
+	FDout *Fo;
+   public:
+	FileObj (const char*, int);
+	FileObj (FDin*);
+	FileObj (FDout*);
+	FileObj (FDin*, FDout*);
+
+	bool Bool ()		{ return true; }
+	__object__ *xnext ();
+	void print ();
+	void flush ();
+
+	void write (StringObj*);
+	char *read (int*);
+	__object__ *r_marshal ();
+
+	~FileObj ();
+};
+
+static TypeObj FileTypeObj ctor (FileObj._v_p_t_r_);
+
+__object__ *open_file (const char *fn, int mode)
+{
+	REFPTR F = new FileObj (fn, mode);
+	if_unlikely (FileObj.cast (F.o)->FD.type == FD_BAD)
+		RaiseIoError ();
+	return F.Dpreserve ();
+}
+
+__object__ *open_file_fd (int fd, int mode)
+{
+/*
+	FDout *fo = mode & (O_WRONLY|O_RDWR) ? new FDout (fd) : 0;
+	FDin *fi = (mode & O_RDWR) || !(mode & O_WRONLY) ? new FDin (fd) : 0;
+	return new FileObj (fi, fo);
+*/
+RaiseNotImplemented ("open_file_fd");
+return &None;
+}
+
+FDout *getFDout (__object__ *o)
+{
+	FileObj *F = FileObj.checkedcast (o);
+	if (!F->Fo)
+		RaiseIoError ();
+	return F->Fo;
+}
+
+FileObj.FileObj (FDin *F)
+{
+	iteratorBase.ctor (&None);
+	Fi = F;
+	Fo = 0;
+	fnm.ctor ();
+	GC_ROOT ();
+}
+
+FileObj.FileObj (FDout *F)
+{
+	iteratorBase.ctor (&None);
+	Fo = F;
+	Fi = 0;
+	fnm.ctor ();
+	GC_ROOT ();
+}
+
+FileObj.FileObj (FDin *fi, FDout *fo)
+{
+	iteratorBase.ctor (&None);
+	Fo = fo;
+	Fi = fi;
+	fnm.ctor ();
+}
+
+FileObj.FileObj (const char *fn, int mode)
+{
+	iteratorBase.ctor (&None);
+	fnm.ctor (new StringObj (fn));
+#ifdef	USE_MMAP
+	mm_start = 0;
+#endif
+	Fi = 0;
+	Fo = 0;
+	FD.ctor (fn, mode);
+
+	switch (FD.type) {
+		case FD_BAD: return;
+		ncase FD_READ: Fi = new FDin (&FD);
+		ncase FD_WRITE: Fo = new FDout (&FD);
+		ncase FD_RW: Fi = new FDin (&FD); Fo = new FDout (&FD);
+		ncase FD_READ_MMAP:
+			mm_start = FD.mm_start;
+			mm_len = FD.len;
+			mm_ptr = 0;
+	}
+}
+
+static REFPTR cslot;
+
+__object__ *FileObj.xnext ()
+{
+#ifdef	USE_MMAP
+	if (mm_start) {
+		if_unlikely (mm_ptr >= mm_len)
+			RaiseStopIteration ();
+		char *p = (char*) memchr (mm_start + mm_ptr, '\n', mm_len - mm_ptr);
+		int nn = p ? p + 1 - mm_start : mm_len;
+		cslot.ctordtorstr (new StringObj binctor (mm_start + mm_ptr, nn - mm_ptr));
+		mm_ptr = nn;
+		return cslot.o;
+	}
+#endif
+	if_unlikely (!Fi)
+		RaiseNotImplemented ("File is not open for reading");
+
+	IOline L;
+
+	if_unlikely (!Fi->readline (L))
+		RaiseStopIteration ();
+	cslot.ctordtorstr (new StringObj allocated (L.s, L.len));
+	return cslot.o;
+}
+
+void FileObj.print ()
+{
+	print_out (STRL ("File object on "), fnm.o);
+}
+
+void FileObj.write (StringObj *S)
+{
+	if_unlikely (!Fo)
+		RaiseNotImplemented ("File is not open for writing");
+	Fo->writedt (S->str, S->len);
+}
+
+char *FileObj.read (int *N)
+{
+#ifdef	USE_MMAP
+	if (mm_start) {
+		// XXX: Check EOF
+		*N = min (mm_len - mm_ptr, *N);
+		char *ret = seg_alloc (*N + 1);
+		memcpy (ret, mm_start + mm_ptr, *N);
+		ret [*N] = 0;
+		mm_ptr += *N;
+		return ret;
+	}
+#endif
+	if_unlikely (!Fi)
+		RaiseNotImplemented ("File is not open for reading");
+	return Fi->readn (N);
+}
+
+__object__ *FileObj.r_marshal ()
+{
+#ifdef	USE_MMAP
+	if (mm_start) {
+		if_unlikely (mm_ptr >= mm_len)
+			RaiseEOFError ();
+		return r_marshal ((byte*) mm_start + mm_ptr, mm_len - mm_ptr, &mm_ptr);
+	}
+	RaiseNotImplemented ("IOError in marshal:load");
+#else
+	RaiseNotImplemented ("Can't marshal:load without mmaped files");
+#endif
+}
+
+void FileObj.flush ()
+{
+	if (Fo) Fo->flush ();
+}
+
+FileObj.~FileObj ()
+{
+	if (Fi) delete Fi;
+	if (Fo) delete Fo;
+}
+
+/* ---------* *---------*/
+
+/* read a marshal python object from a file */
+__object__ *load_marshal (REFPTR argv[])
+{
+	 return FileObj.checkedcast (argv [0].o)->r_marshal ();
+}
+
+modsection static __object__ *write_file (REFPTR argv [])
+{
+	StringObj *S = StringObj.checkedcast (argv [1].o);
+	FileObj.checkedcast (argv [0].o)->write (S);
+	return &None;
+}
+
+modsection static __object__ *read_file (REFPTR argv [], int argc)
+{
+	int N = argc == 2 ? IntObj.checkedcast (argv [1].o)->i : LONG_MAX-10;
+	char *data = FileObj.checkedcast (argv [0].o)->read (&N);
+	return new StringObj allocated (data, N);
+}
+
+_module __object__ *flush_file (REFPTR argv[])
+{
+	FileObj.cast (argv [0].o)->flush ();
+	return &None;
+}
+
+static const method_attribute file_methods [] = {
+	{ "close",	"file.close", SETARGC (1, 1), donothing_f },
+	{ "read",	"file.read", SETARGC (1, 2), read_file },
+	{ "flush",	"file.flush", SETARGC (1, 1), flush_file },
+	{ "close",	"file.close", SETARGC (1, 1), donothing_f },
+	{ "write",	"file.write", SETARGC (2, 2), write_file },
+	MSENTINEL
+};
+
+extern __object__ *RaiseEOFError ();
+
+__object__ *raw_input (REFPTR argv[], int argc)
+{
+	IOline L;
+
+	if (argc) {
+		OUT->print (argv [0].check_string ()->str);
+		OUT->flush ();
+	}
+
+	IN->readline (L);
+	if (!L.len)
+		RaiseEOFError ();
+
+	return new StringObj allocated (L.s, L.len);
+}
+
+//////////////////////////////// initialize //////////////////////////////////////
+
+__object__ *stdoutObj, *stdinObj, *stderrObj;
+
+static	slowcold class InitFile : InitObj {
+	int priority = INIT_ATTR;
+	void todo ()
+	{
+		cslot.ctor (new StringObj (""));
+		FileMethods.ctor (file_methods);
+		stdoutObj = new FileObj (OUT);
+		stderrObj = new FileObj (ERR);
+		stdinObj = new FileObj (IN);
+	}
+};

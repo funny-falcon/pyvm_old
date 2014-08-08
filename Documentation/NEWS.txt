@@ -1,0 +1,51 @@
+1.2 (30-Apr-2006)
+=================
+
+* EPL Whitespaceless frontend. Documentation/EPL.txt, Lib/epl.py
+
+* Included zlib in the source tree for static build.
+
+* Memfs and freezing. See Stuff/FreezeLab
+
+* "Regular Expression to C" module and just in time compiler.
+   Lib/rejit/
+
+* Pythonic ELF loader (experimental).
+
+* New bytecode format (incompatible with python). This has magic
+  number 62054 and can be used for trying our new features.
+  Such a feature is the 'Global Names Tuple' which reduces the
+  size of the .pyc file.
+
+* Ported to cygwin. Cygwin is not a development target. We
+  are basically interested in being able to provide frozen binaries
+  for windows users. That works, but there are warnings and hair.
+
+* Fixes, improvements.  There was a stupid error in the code
+  generation and the size of the pyvm executable was almost two
+  times bigger.  Now the real net-weight of pyvm in x86 is 390K.
+
+
+1.1 (23-Jan-2006)
+=================
+
+* Real lighweight threads. There are two OS threads. The
+  'main thread' which runs the stackless VM and the 'polling thread'.
+  In case of a blocking call, the main thread sends a request
+  to the polling thread and removes the Task from the running list.
+  When there is activity on the file descriptor, the polling thread
+  notifies the main thread that if should put the task back on the
+  running list.
+  The effect of this is that we can run a multithreaded server with
+  thousands of python threads with just 3 OS threads.
+
+  This happens only for: time.sleep, socket.connect, socket.accept
+  and socket.recv.  Other blocking calls will use OS threads from
+  the 'thread pool' (possibly still OS threads < Py threads).
+   
+* faryield. See faryield.txt
+
+* Included the wiki software (pyvm + SimpleHTTPServer + webpy + parawiki).
+  Stuff/wiki
+
+* Many bugfixes.

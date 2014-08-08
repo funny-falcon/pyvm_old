@@ -1,0 +1,118 @@
+Extending and Embedding pyvm
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Extending
+~~~~~~~~~
+
+The way to extend pyvm is with the use of the DLL module which
+wraps C libraries and loads C functions as python callables.
+
+With this approach it is not possible to use python objects
+and functions from pyvm.  But this is good.  For one, it's in
+accordance with good bottom-up design (the only paradigm!).
+Another advantage is that your 'library' will be usable for
+other scripting languages and even as a standalone library.
+
+If you definitelly must use pythonisms (lists/dictionaries),
+you can write them in python: the extension will be some C
+files that implement the static-typed part, and some python
+files that wrap the C files with DLL and use python as the
+driver of those extensions.
+
+The bottom line is that we never use pyvm's internal API
+for programs distributed separately from the pyvm source.
+If you discover that some new functionality just has to use
+the internal API, suggest it and we'll add a new builtin
+method or hardcoded module.
+
+
+Embedding
+~~~~~~~~~
+
+Unlike CPython, pyvm has a different 'public API' which is
+available for other programs that want to embed pyvm.
+This API is a general purpose interface for a language interpreter
+with reference counted objects, and not related to python
+(except from the fact that the language is python).
+
+The very good news is that this API is minimal and frozen,
+yet powerful (and not terribly fast).  A small example of
+it:
+
+	int main ()
+	{
+		/* for simplicity we won't check for success of the calls */
+
+		Pyvm_Init ();
+
+		Pyvm_Exec ("print 'Hello world!'", 0, 0);
+
+		PyvmObj x;
+		Pyvm_Eval ("3 * 'hello world!'", 0, 0, &x);
+
+		printf ("The result is [%s]\n", Pyvm_ToString (x));
+
+		Pyvm_StoreName ("x", 0, x);
+		Pyvm_Exec ("y = x", 0, 0);
+		Pyvm_Eval ("2 * y", 0, 0, &x);
+
+		printf ("The result is [%s]\n", Pyvm_ToString (x));
+
+		Pyvm_ShutDown ();
+	}
+
+Most things are done with Pyvm_Exec and Pyvm_Eval (and their compiled
+counterparts Pyvm_ExecCompiled, Pyvm_EvalCompiled and Pyvm_Compile).
+So when we want to get the 34th argument of an array 'L' we can just say:
+
+		PyvmObj x;
+		Pyvm_StoreName ("i", 0, Pyvm_FromInt (34));
+		Pyvm_Eval ("L [i]", 0, 0, &x);
+		Pyvm_IncrRefCount (x);
+
+If we want to check whether this object is of type integer we have to:
+
+		Pyvm_StoreName ("i", 0, x);
+		PyvmObj y;
+		Pyvm_Eval ("type (i) is int", 0, 0, &y);
+		Pyvm_IncrRefCount (y);
+
+And to compare 'y' with True, we'd say:
+
+		PyvmObj PyvmTrue;
+		Pyvm_Eval ("True", 0, 0, &PyvmTrue);
+		if (y == PyvmTrue)
+			printf ("The element 34 is an int %i!", Pyvm_ToInt (x));
+
+The only case of failure of Pyvm_Exec/Pyvm_Eval is that some exception occured
+in the python code.  We can get it with
+
+		Pyvm_Eval ("sys.exc_info ()", 0, 0, &x);
+
+Another good thing about the API is the function Pyvm_InternDLL.
+Pyvm_InternDLL takes as an argument a pointer to a function which
+returns pointers to functions from strings.  This way we can extend
+the running interpreter with functions from the embedding program!
+
+	void myfunc ()
+	{
+		printf ("hi");
+	}
+
+	void *my_dlsym (const char *s)
+	{
+		if (!strcmp (s, "myfunc"))
+			return myfunc;
+		return 0;
+	}
+
+	int main ()
+	{
+		Pyvm_Init ();
+		PyvmObj x;
+		x = Pyvm_InternDLL (my_dlsym);
+		Pyvm_StoreName ("lib", 0, x);
+		Pyvm_Exec ("f = lib.get (('', 'myfunc', ''))", 0, 0);
+		Pyvm_Exec ("f ()", 0, 0);
+		Pyvm_ShutDown ();
+	}

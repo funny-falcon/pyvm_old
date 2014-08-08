@@ -1,0 +1,243 @@
+//
+// some modules that we have trouble parsing their pyc (maybe because they use
+// other modules that are not implemented, like 're', or because they use special
+// py features we don't want to implemente or because they need special semantics
+// which pyvm doesn't give).  We wrap them here and do a similar job or raise the
+// NotImplemented Interrupt.
+//
+
+extern "errno.h" {
+#include <errno.h>
+}
+
+#include "dynlib.h"
+
+/* ----* obsolete: traceback.format_exc, needed by threading.pyc *---- */
+
+_module __object__ *format_exc_traceback (REFPTR argv [])
+{
+static	StringObj *S;
+	if (!S) {
+		S = new StringObj ("\"%s\" ['%s'] at %s.\n");
+		S->inf ();
+	}
+	Tuplen *T = Tuplen.cast (pyvm_exc_info ());
+	__object__ *T1 = T->__xgetitem__ (0);
+	if (DynClassObj.isinstance (T1) || DynInstanceObj.isinstance (T1)) {
+		try {
+			__object__ *C = DynClassObj.isinstance (T1) ?
+				 DynClassObj.cast (T1)->__name__.o
+				: DynInstanceObj.checkedcast (T1)->__class__.as_class->__name__.o;
+			{
+				REFPTR t = new Tuplen (C, T->__xgetitem__ (1), T->__xgetitem__ (2));
+				T1 = S->binary_modulo (t.o);
+			}
+		} else {
+			pprint ("can't format exception");
+			ReRaise ();
+		}
+	}
+	return T1;
+}
+
+extern __object__ *pyvm_exc_info ();
+
+_module __object__ *print_exc_traceback ()
+{
+	REFPTR E = pyvm_exc_info ();
+	pprint (E.o);
+	return &None;
+}
+
+static const bltinfunc traceback_funcs [] = {
+	{ "format_exc", SETARGC (0, 0), format_exc_traceback, 0 },
+	{ "print_exc", SETARGC (0, 0), print_exc_traceback, 0 },
+	BSENTINEL
+};
+
+slowcold __object__ *import_traceback ()
+{
+	return new ModuleObj BltinModule ("traceback", traceback_funcs);
+}
+
+/* ---* threading.py needs the collections deque for its test function!! */
+
+static const bltinfunc collections_funcs [] = {
+	{ "deque", SETARGC (0, 0), 0, 0 },
+	BSENTINEL
+};
+
+slowcold __object__ *import_collections ()
+{
+	return new ModuleObj BltinModule ("collections", collections_funcs);
+}
+
+/* ---* warnings. too much *--- */
+
+_module __object__ *warn_warnings (REFPTR argv[], int argc)
+{
+	if (StringObj.isinstance (argv [0].o))
+		fprintf (stderr, "I got a waring for you:\"%s\"\n", argv [0].as_string->str);
+	else
+		pprint ("I got a waring for you", argv [0].o);
+	return &None;
+}
+
+static const bltinfunc warn_funcs [] = {
+	{ "warn", SETARGC (1, 3), warn_warnings, 0 },
+	BSENTINEL
+};
+
+slowcold __object__ *import_warnings ()
+{
+	return new ModuleObj BltinModule ("warnings", warn_funcs);
+}
+
+/* ---* imp / get_magic *--- */
+
+_module __object__ *get_magic ()
+{
+	long l = MAGIC;
+	return new StringObj ((char*) &l, sizeof l);
+}
+
+static const bltinfunc imp_funcs [] = {
+	{ "get_magic", SETARGC (0, 0), get_magic, 0 },
+	BSENTINEL
+};
+
+slowcold __object__ *import_imp ()
+{
+	return new ModuleObj BltinModule ("imp", imp_funcs);
+}
+
+//////////////////////////////////
+
+slowcold __object__ *import_errno ()
+{
+	ModuleObj *ns = new ModuleObj BltinModule ("errno");
+	ns->AddAttributes (
+		("EEXIST", newIntObj (EEXIST)),
+		("ENOENT", newIntObj (ENOENT))
+	);
+	return ns;
+}
+
+//////////////////////////////////
+
+#include "zlib/zlib.h"
+
+slowcold __object__ *import__zlibfuncs ()
+{
+	ModuleObj *ns = new ModuleObj BltinModule ("_zlibfuncs");
+	ns->AddAttributes (
+		("compress2", newIntObj ((int) compress2)),
+		("uncompress", newIntObj ((int) uncompress)),
+		("adler32", newIntObj ((int) adler32)),
+		("crc32", newIntObj ((int) crc32))
+	);
+	return ns;
+}
+//////////////////////////////////
+
+/* struct module -- not silly */
+
+static char *struct_fmt (__object__ *s, int *size)
+{
+	char *S = StringObj.checkedcast (s)->str;
+
+	if (strchr ("<>!=@", S [0]))
+		++S;
+
+	int sz = 0;
+	for (int i = 0; S [i]; i++)
+		switch (S [i]) {
+		case 'i': case 'I':
+			if (sz%4) RaiseNotImplemented ("struct with padding");
+			sz += 4;
+		ncase 'h': case 'H':
+			if (sz%2) RaiseNotImplemented ("struct with padding");
+			sz += 2;
+		ncase 'b': case 'c':
+			++sz;
+		ndefault:
+			RaiseNotImplemented ("struct.(un)pack can only (un)pack 'i' for now..");
+	}
+
+	*size = sz;
+	return S;
+}
+
+_module __object__ *sizeof_struct (REFPTR argv[])
+{
+	int size;
+	struct_fmt (argv [0].o, &size);
+	return newIntObj (size);
+}
+
+_module __object__ *pack_struct (REFPTR argv[], int argc)
+{
+#define STOR(X) *(X*)bfr = (X) v; bfr += sizeof (X);
+	int size;
+	char *f = struct_fmt (argv [0].o, &size);
+
+	if (argc - 1 != strlen (f))
+		RaiseTypeError ("argument number mismatch for pack");
+
+	void *bfr = seg_alloc (strlen (f) * size + 1), *bfr0 = bfr;
+	for (int i = 0; f [i]; i++) {
+		int v = IntObj.fcheckedcast (argv [i + 1].o)->i;
+		switch (f [i]) {
+			 case 'i': STOR(int)
+			ncase 'I': STOR(unsigned int)
+			ncase 'h': STOR(short)
+			ncase 'H': STOR(unsigned short)
+			ncase 'b': STOR(unsigned char)
+			ncase 'c': STOR(signed char)
+		}
+	}
+	*(char*) bfr = 0;
+	return new StringObj allocated (bfr0, bfr - bfr0);
+#undef STOR
+}
+
+_module __object__ *unpack_struct (REFPTR argv[])
+{
+#define STOR(X) v = *(X*)B; B += sizeof (X);
+	int size;
+	char *f = struct_fmt (argv [0].o, &size);
+	StringObj *S = StringObj.fcheckedcast (argv [1].o);
+	int l = strlen (f);
+	if (size != S->len)
+		RaiseTypeError ("unpack size does not match format");
+
+	void *B = (void*) S->str;
+	int v;
+	Tuplen *t = new Tuplen __sizector (l);
+	for (int i = 0; i < l; i++) {
+		switch (f [i]) {
+			default: /* warning */
+			 case 'i': STOR(int)
+			ncase 'I': STOR(unsigned int)
+			ncase 'h': STOR(short)
+			ncase 'H': STOR(unsigned short)
+			ncase 'b': STOR(unsigned char)
+			ncase 'c': STOR(signed char)
+		}
+		t->__xinititem__ (i, newIntObj (v));
+	}
+	return t;
+#undef STOR
+}
+
+static const bltinfunc struct_funcs [] = {
+	{"pack",	SETARGC (2, INFARGC), pack_struct, 0},
+	{"unpack",	SETARGC (2, 2), unpack_struct, 0},
+	{"sizeof",	SETARGC (1, 1), sizeof_struct, 0},
+	BSENTINEL
+};
+
+slowcold __object__ *import_struct ()
+{
+	return new ModuleObj BltinModule ("struct", struct_funcs);
+}

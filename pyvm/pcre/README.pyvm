@@ -1,0 +1,7 @@
+This is the stripped down version of PCRE from the exim
+mail client.
+
+This is ideal for embedding the PCRE library in other
+programs.
+
+Thanks to Philip Hazel!

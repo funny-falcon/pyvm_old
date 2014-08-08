@@ -1,0 +1,461 @@
+#include "dynlib.h"
+#include "py_opcodes.h"
+
+/* Some things in pyvm are done through bytecode assembly (py in py!).
+ * We can either create a new function each time or make the function
+ * once.  The latter is prefered.  Instead of passing arguments to our
+ * functions we modify directly their consts.  In order for this to be
+ * reentrant, the bytecode must load the consts onto the stack with
+ * LOAD_CONST, as soon as possible and definitelly before a JUMP
+ * opcode which may do context switch
+ */
+
+/*
+ * The BIOS -- The real BIOS is BIOS.pyc. However if BIOS.pyc is lost
+ * (or buggy) we would not be able to start the VM! So this is the
+ * simple-alternative BIOS, built inside the VM which makes our life
+ * much easier in cases of bootstrap problems.
+ */
+
+static	byte bootcode [] = {
+	/* consts (None, "Unhandled exception", entryfunc, SystemExit) */
+	/* names (traceback, format_exc, sys, exitfunc) */
+	/*
+		def BIOS():
+		    try:
+			entryfunc()
+		    except SystemExit:
+			pass
+		    except:
+			import traceback
+			print "Unhandled exception", traceback.format_exc ()
+		    try:
+			import sys
+			sys.exitfunc ()
+		    except:
+			pass
+	*/
+
+	/*0*/ 	SETUP_EXCEPT, BYTEARG(11),		/*to 14*/
+	/*3*/ 	LOAD_CONST, BYTEARG(2),			/*entryfunc*/
+	/*6*/ 	CALL_FUNCTION, BYTEARG(0),		/*call entryfunc()*/
+	/*9*/ 	POP_TOP,
+	/*10*/ 	POP_BLOCK,
+	/*11*/ 	JUMP_FORWARD, BYTEARG(49),		/*to 63*/
+	/*14*/ 	DUP_TOP,
+	/*15*/ 	LOAD_CONST, BYTEARG(3),			/*SystemExit*/
+	/*18*/ 	COMPARE_OP, BYTEARG(10),			/*exception match*/
+	/*21*/ 	JUMP_IF_FALSE, BYTEARG(7),		/*to 31*/
+	/*24*/ 	POP_TOP,
+	/*25*/ 	POP_TOP,
+	/*26*/ 	POP_TOP,
+	/*27*/ 	POP_TOP,
+	/*28*/ 	JUMP_FORWARD, BYTEARG(32),		/*to 63*/
+	/*31*/ 	POP_TOP,
+#if 0
+	/*32*/ 	POP_TOP,
+	/*33*/ 	POP_TOP,
+	/*34*/ 	POP_TOP,
+#endif
+	/*35*/ 	LOAD_CONST, BYTEARG(0),			/*None*/
+	/*38*/ 	IMPORT_NAME, BYTEARG(0),			/*traceback*/
+	/*41*/ 	STORE_FAST, BYTEARG(0),			/*traceback*/
+	/*44*/ 	LOAD_CONST, BYTEARG(1),			/*'Unhandled exception'*/
+	/*47*/ 	PRINT_ITEM,
+	/*48*/ 	LOAD_FAST, BYTEARG(0),			/*traceback*/
+	/*51*/ 	LOAD_ATTR, BYTEARG(1),			/*format_exc*/
+	/*54*/ 	CALL_FUNCTION, BYTEARG(0),		/*call traceback.format_exc()*/
+	/*57*/ 	PRINT_ITEM,
+	/*58*/ 	PRINT_NEWLINE,
+		POP_TOP,POP_TOP,POP_TOP,
+	/*59*/ 	JUMP_FORWARD, BYTEARG(1),		/*to 63*/
+	/*62*/ 	END_FINALLY,
+	/*63*/ 	SETUP_EXCEPT, BYTEARG(23),		/*to 89*/
+	/*66*/ 	LOAD_CONST, BYTEARG(0),			/*None*/
+	/*69*/ 	IMPORT_NAME, BYTEARG(2),			/*sys*/
+	/*72*/ 	STORE_FAST, BYTEARG(1),			/*sys*/
+	/*75*/ 	LOAD_FAST, BYTEARG(1),			/*sys*/
+	/*78*/ 	LOAD_ATTR, BYTEARG(3),			/*exitfunc*/
+	/*81*/ 	CALL_FUNCTION, BYTEARG(0),		/*call sys.exitfunc()*/
+	/*84*/ 	POP_TOP,
+	/*85*/ 	POP_BLOCK,
+	/*86*/ 	JUMP_FORWARD, BYTEARG(7),		/*to 96*/
+	/*89*/ 	POP_TOP,
+	/*90*/ 	POP_TOP,
+	/*91*/ 	POP_TOP,
+	/*92*/ 	JUMP_FORWARD, BYTEARG(1),		/*to 96*/
+	/*95*/ 	END_FINALLY,
+	/*96*/ 	LOAD_CONST, BYTEARG(0),			/*None*/
+	/*99*/ 	END_VM
+};
+
+static inline_machine_code BIOS;
+
+PyFuncObj *BIOS_func (__object__ *entryfunc)
+{
+static	PyFuncObj *BIOSFunc;
+
+	once {
+		Tuplen *cc = new Tuplen (&None, new StringObj ('Unhandled exception'),
+			entryfunc, DynExceptions.SystemExit);
+		Tuplen *nn = new Tuplen (Interns.traceback, Interns.format_exc,
+					 Interns.sys, Interns.exitfunc);
+		Tuplen *vn = new Tuplen (Interns.traceback, Interns.sys);
+		BIOS.nloops++;
+		__object__ *c = new PyCodeObj (BIOS, cc, 0, 0, 9, "*BIOS*", nn, vn);
+		BIOSFunc = new PyFuncObj (c, globalocals);
+		BIOSFunc->GC_ROOT ();
+	}
+	return BIOSFunc;
+}
+
+/*
+ * bytecode assembly to boot a new thread
+ */
+
+static	byte thread_off_asm [] = {
+	SETUP_EXCEPT, BYTEARG(12),		// to label1
+	LOAD_FAST, BYTEARG(0),			// functionObj
+	LOAD_FAST, BYTEARG(1),			// tupleObj
+	CALL_FUNCTION_VAR, BYTEARG(0),
+	END_THREAD, BYTEARG(0),
+    /*label1:*/
+	PRINT_ITEM,
+	PRINT_ITEM,
+	PRINT_NEWLINE,
+	JUMP_FORWARD, BYTEARG(1),
+	END_FINALLY,
+	END_THREAD, BYTEARG(0)
+};
+
+static inline_machine_code THREAD_CODE;
+PyFuncObj *BootThread;
+
+/*
+ * This is called after the first 'start_new_thread' to enter
+ * multitasking mode. We need a 'JUMP_ABSOLUTE' to check vmTicks
+ * and relinguish the VM (after which the main thread becomes the
+ * thread creator).
+ */
+
+static	byte multitask_asm [] = {
+	JUMP_ABSOLUTE, BYTEARG(3),
+	LOAD_FAST, BYTEARG(0),
+	RETURN_VALUE
+};
+
+static inline_machine_code MULTITASK_CODE;
+PyFuncObj *MultiTask;
+
+/*
+ * block a thread
+ *
+ * This is basically used by -soft- locks.
+ * However, in the case of vmpoll it's also used to defer Tasks
+ * until the poll-notifier wakes up and puts the task back on the
+ * running list. In this case the poll notifier can directly modify
+ * the stack of the BlockThread function to set the return value.
+ */
+
+static	byte blocking_assembly [] = {
+	LOAD_CONST, BYTEARG(0),
+	BLOCK_THREAD, BYTEARG(0),
+	RETURN_VALUE
+};
+
+static inline_machine_code ACQUIRE_CODE;
+
+PyFuncObj *block_thread ()
+{
+static	PyFuncObj *BlockThread;
+	once {
+		Tuplen *consts = new Tuplen (&TrueObj);
+		__object__ *c = new PyCodeObj (ACQUIRE_CODE, consts, 0, 0, 1, "*lock thread*");
+		BlockThread = new PyFuncObj (c, globalocals);
+		BlockThread->GC_ROOT ();
+	}
+	return BlockThread;
+}
+
+/*
+ * import a module with the import lock
+ */
+
+static	byte import_asm [] = {
+	LOAD_FAST, BYTEARG(0),
+	LOAD_CONST, BYTEARG(1),
+	SETUP_FINALLY, BYTEARG(11),		// to finally
+	CALL_FUNCTION, BYTEARG(0),
+	POP_TOP,
+	_IMPORT_NAME, BYTEARG(0),
+	POP_BLOCK,
+	LOAD_CONST, BYTEARG(0),
+   /*finally:*/
+	LOAD_CONST, BYTEARG(2),
+	CALL_FUNCTION, BYTEARG(0),
+	POP_TOP,
+	END_FINALLY,
+	RETURN_VALUE
+};
+
+static inline_machine_code IMPORT_CODE;
+extern void make_IL_lock (REFPTR, REFPTR);
+PyFuncObj *lockedImport;
+
+/*
+ * imap
+ */
+
+static	byte imap_asm [] = {
+	/*
+		def imap(function, *iterables):
+		    for i in izip (*iterables):
+			yield function (*i)
+		# izip is a const, the izip of *this* module
+	*/
+	SETUP_LOOP, BYTEARG (30),
+	LOAD_CONST, BYTEARG (0),
+	LOAD_FAST, BYTEARG(1),
+	CALL_FUNCTION_VAR, BYTEARG (0),
+	GET_ITER,
+	FOR_ITER, BYTEARG (16),
+	STORE_FAST, BYTEARG (2),
+	LOAD_FAST, BYTEARG (0),
+	LOAD_FAST, BYTEARG (2),
+	CALL_FUNCTION_VAR, BYTEARG (0),
+	YIELD_VALUE,
+	JUMP_ABSOLUTE, BYTEARG (13),
+	POP_BLOCK,
+	LOAD_CONST, BYTEARG (1),
+	RETURN_VALUE
+};
+
+static inline_machine_code IMAP_CODE;
+
+PyFuncObj *imap_func (__object__ *izipfunc)
+{
+static	PyFuncObj *imapFunc;
+	once {
+		Tuplen *cc = new Tuplen (izipfunc, &None);
+		Tuplen *nn = new Tuplen (INTERNED("function"), INTERNED("iterables"),INTERNED("i"));
+		__object__ *c = new PyCodeObj (IMAP_CODE, cc, 1, CO_GENERATOR|CO_VARARGS,
+						5, "*imap*", nn, nn);
+		imapFunc = (PyFuncObj*) MakeFunction (c, globalocals);
+		imapFunc->GC_ROOT ();
+	}
+	return imapFunc;
+}
+
+/*
+ * invoke __del__ zombies
+ */
+
+static	byte del_asm [] = {
+	/*
+		def run_graveyard (zombies):
+		    for i in zombies:
+			try: i()
+			except: pass
+		# TODO: it is highly unlikely that __del__ throws
+		# therefore, move the try/except out of the loop and
+		# resume on exception ?
+	*/
+	SETUP_LOOP, BYTEARG(35),
+	LOAD_FAST, BYTEARG(0),
+	GET_ITER,
+	FOR_ITER, BYTEARG(27),
+	STORE_FAST, BYTEARG(1),
+	SETUP_EXCEPT, BYTEARG(11),
+	LOAD_FAST, BYTEARG(1),
+	CALL_FUNCTION, BYTEARG(0),
+	POP_TOP,
+	POP_BLOCK,
+	JUMP_ABSOLUTE, BYTEARG(7),
+	POP_TOP,
+	POP_TOP,
+	POP_TOP,
+	JUMP_ABSOLUTE, BYTEARG(7),
+	END_FINALLY,
+	JUMP_ABSOLUTE, BYTEARG(7),
+	POP_BLOCK,
+	LOAD_CONST, BYTEARG(0),
+	RETURN_VALUE
+};
+
+static inline_machine_code DEL_CODE;
+PyFuncObj *graveFunc;
+
+/*
+ * list() in case the iterator needs bytecode execution
+ */
+
+static	byte list_asm [] = {
+	/* locals (iter, LIST, i) */
+	LOAD_FAST, BYTEARG (0),
+	FOR_ITER, BYTEARG (8),
+	LOAD_FAST, BYTEARG (1),
+	ROT_TWO,
+	LIST_APPEND,
+	JUMP_ABSOLUTE, BYTEARG (3),
+	LOAD_CONST, BYTEARG (0),
+	RETURN_VALUE
+};
+
+static inline_machine_code LIST_CODE;
+PyFuncObj *listFunc;
+
+/*
+ * instance construction
+ * Without this we would have to preempt the vm to call __init__() of classes.
+ * As a result, constructors should be small because that will exclude other
+ * threads.  This is the code the main vm will have to execute in order to
+ * implement:  inst = cls ()
+ */
+
+static	byte constructor_asm [] = {
+	/* def construct (constructor, instance):
+		constructor ()
+		return instance
+	 */
+	LOAD_FAST, BYTEARG (0),
+	CALL_FUNCTION, BYTEARG (0),
+	LOAD_FAST, BYTEARG (1),
+	RETURN_VALUE
+};
+
+static inline_machine_code CONSTRUCTOR_CODE;
+extern PyFuncObj *constructorFunc;
+
+/*
+ * "x in generator()" is done in bytecode. proved to be faster
+ * because if we do this in C calling preempt_pyvm for every
+ * next() element, we pay more.
+ */
+
+static	byte in_generator_asm [] = {
+	LOAD_FAST, BYTEARG (1),
+	FOR_ITER, BYTEARG (18),
+	LOAD_FAST, BYTEARG (0),
+	COMPARE_OP, BYTEARG (2),
+	JUMP_IF_FALSE, BYTEARG (5),
+	POP_TOP,
+	LOAD_CONST, BYTEARG (0),	// True
+	RETURN_VALUE,
+	POP_TOP,
+	JUMP_ABSOLUTE, BYTEARG (3),
+	LOAD_CONST, BYTEARG (1),	// False
+	RETURN_VALUE
+};
+
+static inline_machine_code IN_GENERATOR_CODE;
+PyFuncObj *in_generatorFunc;
+
+/*
+ *
+ */
+
+static	byte dict_mapping_asm [] = {
+	/*
+		def foo(d,M):
+			for i in M.keys():
+				d [i] = M [i]
+			return d
+	*/
+	LOAD_FAST, BYTEARG (1),
+	LOAD_ATTR, BYTEARG (1),
+	CALL_FUNCTION, BYTEARG (0),
+	GET_ITER,
+	FOR_ITER, BYTEARG (20),
+	STORE_FAST, BYTEARG (2),
+	LOAD_FAST, BYTEARG (1),
+	LOAD_FAST, BYTEARG (2),
+	BINARY_SUBSCR,
+	LOAD_FAST, BYTEARG (0),
+	LOAD_FAST, BYTEARG (2),
+	STORE_SUBSCR,
+	JUMP_ABSOLUTE, BYTEARG (10),
+	LOAD_FAST, BYTEARG (0),
+	RETURN_VALUE
+};
+
+static inline_machine_code DICT_MAPPING_CODE;
+PyFuncObj *dict_mappingFunc;
+
+////////////////////// initialize //////////////////////////////////
+
+static	slowcold class InitBytecodes : InitObj {
+	int priority = INIT_BYTEASM;
+	void todo ()
+	{
+		CONSTRUCTOR_CODE.make (APAIR (constructor_asm));
+		IN_GENERATOR_CODE.make (APAIR (in_generator_asm));
+		DICT_MAPPING_CODE.make (APAIR (dict_mapping_asm));
+		LIST_CODE.make (APAIR (list_asm));
+		DEL_CODE.make (APAIR (del_asm));
+		IMAP_CODE.make (APAIR (imap_asm), true);
+		IMPORT_CODE.make (APAIR (import_asm));
+		ACQUIRE_CODE.make (APAIR (blocking_assembly));
+		THREAD_CODE.make (APAIR (thread_off_asm));
+		MULTITASK_CODE.make (APAIR (multitask_asm));
+		BIOS.make (bootcode, sizeof bootcode);
+	}
+};
+
+static	slowcold class InitPyFuncs : InitObj {
+	int priority = INIT_FUNCS;
+	void todo ()
+	{
+		Tuplen *nm, *cc;
+		__object__ *c;
+
+		nm = new Tuplen (Interns.x, Interns.y);
+		BootThread = new PyFuncObj (new PyCodeObj (THREAD_CODE, NILTuple, 2, 0, 6,
+			 "*fork thread*", nm, nm), globalocals);
+		BootThread->GC_ROOT ();
+
+		if (1) {
+			REFPTR acf, ref;
+			make_IL_lock (acf, ref);
+			cc = new Tuplen (&None, acf.o, ref.o);
+		}
+		nm = new Tuplen (Interns.x);
+		c = new PyCodeObj (IMPORT_CODE, cc, 1, 0, 8, "*import wrap*", nm, nm);
+		lockedImport = new PyFuncObj (c, globalocals);
+		lockedImport->GC_ROOT ();
+
+		nm = new Tuplen (Interns.x);
+		c = new PyCodeObj (MULTITASK_CODE, NILTuple, 1, 0, 8, "*multitask*", nm, nm);
+		MultiTask = new PyFuncObj (c, globalocals);
+		MultiTask->GC_ROOT ();
+
+		cc = new Tuplen (&None);
+		nm = new Tuplen (Interns.x, Interns.i);
+		c = new PyCodeObj (DEL_CODE, cc, 1, 0, 5, "*zombie killer*", nm, nm);
+		graveFunc = new PyFuncObj (c, globalocals);
+		graveFunc->GC_ROOT ();
+
+		cc = new Tuplen (&None);
+		nm = new Tuplen (Interns.i, Interns.x);
+		c = new PyCodeObj (LIST_CODE, cc, 2, 0, 4, "*list*", nm, nm);
+		listFunc = new PyFuncObj (c, globalocals);
+		listFunc->GC_ROOT ();
+
+		nm = new Tuplen (Interns.x, Interns.y);
+		c = new PyCodeObj (CONSTRUCTOR_CODE, NILTuple, 2, 0, 2, "*ctor*", nm, nm);
+		constructorFunc = new PyFuncObj (c, globalocals);
+		constructorFunc->GC_ROOT ();
+		constructorFunc->inf ();
+
+		cc = new Tuplen (&TrueObj, &FalseObj);
+		nm = new Tuplen (Interns.x, Interns.i);
+		c = new PyCodeObj (IN_GENERATOR_CODE, cc, 2, 0, 4, "*in_generator*", nm, nm);
+		in_generatorFunc = new PyFuncObj (c, globalocals);
+		in_generatorFunc->GC_ROOT ();
+
+		cc = NILTuple;
+		nm = new Tuplen (Interns.x, Interns.keys, Interns.i);
+		c = new PyCodeObj (DICT_MAPPING_CODE, cc, 2, 0, 7, "*dict_mapping*", nm, nm);
+		dict_mappingFunc = new PyFuncObj (c, globalocals);
+		dict_mappingFunc->GC_ROOT ();
+	}
+};

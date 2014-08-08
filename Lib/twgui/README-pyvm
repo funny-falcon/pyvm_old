@@ -1,0 +1,9 @@
+The twilight gui was released in September 2004 but never
+got an "Ok lets do this!" proclamation and its development
+was halted at the time.
+
+In November 2005 twilight GUI was resurrected as standard
+part of the pyvm toolchain. It can still be distributed
+independently. You are allowed to take the wrap_*.py files
+and include them in your own project and use them with
+python. They are in the domain of the public.

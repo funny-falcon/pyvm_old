@@ -1,0 +1,183 @@
+What is it						see Docmentation/NEWS.txt
+===========
+
+pyvm is:
+- a virtual machine that can run python 2.3/2.4 bytecode
+- a compiler written in python, that can compile python source code to bytecode.
+  the bytecode of the compiler can be executed by the virtual machine.
+- useful libraries (batteries) and applications
+
+Blurb
+======
+
+Usecases
+--------
+
+Does pyvm replace python?
+
+No. If, say, you want to run twill to download your site, there is no reason
+to do this with pyvm.  For one, it will fail, and there no reason to go hacking
+pyvm to implement proper subclassing of builtin types.  Python 2.4 is free, works
+and it will always be available.  So we can just use python to *get the job done*.
+In fact, pyvm development is not possible without Python 2.4.
+
+pyvm is mostly useful for writting *new* applications.
+
+So why Python? Why not invent another language and "innovate"?
+
+Some theory:
+
+	If you wrote free software before 1993, you were automatically
+	and instantly famous. It was tough times, freedom of software was
+	threatened and communities formed easilly.
+
+	After 1995 we entered the `too much free software` period.
+	As a matter of fact, after 2000 it is impossible for a single
+	individual to develop a new programming system with any
+	chances of success.  The only new programming systems that have
+	succeeded are either backed up commercially (Java, C#) or
+	backed up by widely used systems (javascript->web browsers,
+	PHP->apache). And their success is arguable.
+
+	Many new programming languages have appeared. You can check out
+	freshmeat.net/interpreters.  But /how/ successful a PR will be
+	is not only a function of how good it is, but also of how many
+	alternatives existed at the time it appeared.  Take tcl; it's
+	crap compared to perl and python.  But at the time tcl appeared
+	it was the only alternative.  Take lisp; FP is fun but it's not
+	that lisp makes solving AI problems any easier than python.
+	Take FORTRAN; nuff said.  Take some of the post-2000 languages.
+	They have zero users.  Does that mean that python or perl are
+	infinitively better?
+
+And this is where pyvm comes in.  When we want to develop a new dynamic
+language system/runtime `X`, there are two ways:
+
+	1. Do everything from the scratch. Design the language, the byteocde.
+	   Write tests, design the standard library, implement and test the
+	   standard library, document everything.
+	   With this approach, we will need at least 5 years to catch up
+	   with the progress of todays dynamic language systems.
+
+	2. Re-use an existing technology (and *that* is what Joel was talking
+	   about).  Use the technological wisdom and experience of some existing
+	   system `Y`.  Implement `Y` and then *modify* `Y` to get to `X`.
+	   The work required to diff `Y` to `X` is *much* less than (1) and
+	   consequently, this is the most efficient way to create `X`.
+	   Of course, that requires an easily-modifiable and simple, yet
+	   efficient and portable, implementation of `Y`.
+
+pyvm is scenario 2.  It implements a good subset of python as the base technology
+`Y` and provides that.  From then on, it's possible to modify pyvm to achieve
+your new dynamic runtime, with other frontends, VM features, etc.
+But pyvm is not python.  Perl and ruby backends are also very welcome (some are
+in the works, in fact).
+
+In what way is pyvm better than glib, APR, <other "runtime">?
+-------------------------------------------------------------
+
+It is powered by Python :)
+No, really, it is all about bytecode.  Some people accuse bytecode of being
+slow but the truth is that with bytecode you can have some very powerful
+stuff like:
+
+	- dynamic compilation (eval, exec)
+	- co-routines
+	- generators
+	- soft exceptions
+	- portable freezing
+
+while it is still possible to code the critical parts of your code in C and
+use them by the runtime.  If you are going dynamic, you'd better go all the
+way. Let us call the existance of `eval` the factor which decides whether a
+runtime is dynamic or not. Languages that don't have `eval` are not dynamic.
+
+Dynamic Tool
+------------
+
+There are three kinds of users:
+
+	1) Most users want the software (internet navigator, winamp, word), preferrably
+	   without paying.
+	2) Many users also want the source code of the software, so they can learn and
+	   contribute.
+	3) Some users want to be able to modify their tools. Users from this category
+	   get depressed when their are stuck with tools with minior imperfections!
+
+Theoretically, one can modify all open source tools, but in practice for very large
+projects (python, gcc, perl, etc), that is not possible.  It would be ideal if the
+user could just enhance the tool in a couple of days and then move on with the
+application, without having to convince standard comitties and wait many years for
+the next release!
+
+pyvm is a dynamic tool: using pyvm means hacking pyvm.  We don't claim that pyvm
+will suffice as it is without tailoring it for your application's needs.  On the
+other hand, designing a programming system in parallel with a use-case is surely
+the *best* way to make a great programming tool. 
+ 
+Forking
+-------
+
+In order to be useful in its usecase, pyvm supports forking development.
+The suggested way is to take pyvm, make your own tree, and develop your
+pyvm-based application/language/system. (the source code should be available
+by LGPL).  (unless it is about small fixes/patches which can be sent directly
+to the mailing list)
+
+Then, whenever you have time you can initiate a `sync` session. `sync` is
+when two different trees merge, with modifications from both sides to the
+best common features.
+
+This procedure may require more work for the developers, but it is very
+evolutionary (and darwinian) because due to the hard work, participants
+will merge only the really good features.  After a long time, official
+standarization can come to do a `reset-sync`.  Propose the standard and
+require from the developers trees to sync with it, in order to conform.
+
+Standarization should come last, as C has shown.
+
+
+Now what?
+=========
+
+If you've installed pyvm you can:
+
+- go to Lib/pyc and type "python test_bootstrap.py", to see if that works
+- you can run "pyvm test_libsize.pyc" vs. "python test_libsize.pyc" to see
+  which is faster.
+- go to Stuff/Benchmarks and type "./Dejavu.py" which will compare pyvm vs.
+  python on the collection of benchmarks. (the cooked-bench suite)
+- If you have a graphics display you can try out the openGL tests from
+  Stuff/gltests.
+- go to Stuff/wiki/example and type "pyvm site.py 9000". Then open the
+  file to_the_wiki.html with a web browser!
+
+pyvm does not have an interactive shell yet. It can be easilly emulated
+with raw_input(), but for readline functionality we'd rather rewrite
+readline in python instead of wrapping the GNU readline library.
+
+
+Further hacking
+===============
+
+The best way to get into pyvm is to take some random program and try to
+make it run with pyvm.  Sometimes there may be missing builtins or bugs.
+Other times, cans of worms!
+
+
+The rest
+========
+
+pyvm is Copyright (C) 2005, 2006  Stelios Xanthakis
+
+pyvm is distributed under the terms of the GNU Lesser General Public License.
+(In the directory Stuff there are third party programs which are
+distributed under GPL.  LGPL does not apply to them)
+
+pyvm uses code from various people.
+Please see Documentation/CREDITS.txt
+
+Homepage: http://students.ceid.upatras.gr/~sxanth/pyvm
+List: http://www.freelists.org/lists/pyc
+e-mail: sxanth@ceid.upatras.gr
+SCM: There is a git tree but no static IP yet.

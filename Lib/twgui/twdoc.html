@@ -1,0 +1,1160 @@
+<html>
+ <head>
+  <meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1">
+  <title>Twilight GUI</title>
+ </head>
+ <body bgcolor="white" text="black" link="#0000ff" vlink="#840084" alink="#0000ff">
+<h2>Twilight GUI Documentation</h2>
+<p><b>Table of Contents</b></p>
+<dl>
+ <dt>1. <a href="#import">Importing the wrappers</a></dt>
+ <dt>2. <a href="#intro">Hello World</a></dt>
+ <dt>3. <a href="#ide">An IDE to run the examples</a></dt>
+ <dt>4. <a href="#call">Callback mechanism</a></dt>
+ <dt>5. <a href="#button"><tt>button</tt> widget</a></dt>
+ <dt>6. <a href="#place">Widget Placement</a></dt>
+ <dt>7. <a href="#check"><tt>checkbutton</tt> widget</a></dt>
+ <dt>8. <a href="#label"><tt>label</tt> widget</a></dt>
+ <dt>9. <a href="#radio">Radio buttons</a></dt>
+ <dt>10. <a href="#toggle"><tt>tbutton</tt> widget</a></dt>
+ <dt>11. <a href="#text"><tt>textentry</tt> widget</a></dt>
+ <dt>12. <a href="#editor"><tt>editor</tt> widget</a></dt>
+ <dt>13. <a href="#image"><tt>image</tt> widget</a></dt>
+ <dt>14. <a href="#split"><tt>splitter</tt> views</a></dt>
+ <dt>15. <a href="#list"><tt>listbox</tt> widget</a></dt>
+ <dt>16. <a href="#stree"><tt>streebox</tt> widget (static tree)</a></dt>
+ <dt>17. <a href="#tree"><tt>treebox</tt> widget</a></dt>
+ <dt>18. <a href="#pop"><tt>popup</tt> command</a></dt>
+ <dt>19. <a href="#dialog">modal <tt>Dialog</tt> windows</a></dt>
+ <dt>20. <a href="#workspace">Workspaces</a></dt>
+ <dt>21. <a href="#file">Higher level widgets (openFile, saveFile)</a></dt>
+</dl>
+
+<p>
+At the moment, the Twilight GUI interface is minimal. Only the most basic
+widgets are implemented and standard signals are connected to them.
+</p>
+
+<!----------------------------------------------------->
+<h2><a name="import"></a>1. Importing the wrappers</h2>
+
+<p>
+In order to use TG we have to import one of: <tt>wrap_pygtk.py</tt>,
+<tt>wrap_pyqt.py</tt>, <tt>wrap_wxpython.py</tt> or
+<tt>wrap_tkinter.py</tt>.
+It's possible to import more than one and switch GUIs at
+runtime but often one toolkit may not allow the threads of another one to
+run and this should be used only for the development of TG itself.
+</p>
+
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+	GUI=None
+	try: # try to import PyQt first
+ 	    import wrap_pyqt
+	    GUI = wrap_pyqt
+	except ImportError:
+	    try: # if it doesn't exist, go for PyGTK
+	        import wrap_pygtk
+	        GUI = wrap_pygtk
+	    except ImportError:
+	        try: # try for wxPython
+	            import wrap_wxpython
+	            GUI = wrap_wxpython
+	        except ImportError:
+		    try: # finally go for Tkinter
+			import wrap_tkinter
+			GUI = wrap_tkinter
+		    except ImportError:
+	                print "No toolkit"
+</pre></td></tr></tbody></table>
+
+<p> In the future we may define a standard environemnt variable which
+would set the user's preferable toolkit search order.  For example something like:
+</p>
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+TWGUI_TOOLKITS = [ 'pygtk', 'pyqt', 'wxpython', 'tkinter' ]
+</pre></td></tr></tbody></table>
+
+<!--------------------------------------------------->
+<h2><a name="intro"></a>2. Hello World</h2>
+
+<p>
+  The basic element of a TG application is the <tt>Window</tt> class.  There are
+many ways to use a window to put widgets in it, for example, inheritance,
+creating a window and calling its 'widget generation functions', passing
+the widget creation code as a string to the <tt>__init__</tt> of the window, etc.
+In this tutorial we'll see the method of creating a Window and
+calling its 'widget creation functions':
+</p>
+
+<p>
+Supposing you've imported the apropriate wrapper and set <tt>GUI=wrap_toolkit</tt>,
+the simple 'hello world' example is this:
+</p>
+
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+	W=GUI.Window ()
+	W.start_construction ()
+	W.button (text='Click me', cmd='print "Hello world"')
+	W.end_construction ()
+	GUI.exec_loop ()
+</pre></td></tr></tbody></table>
+
+<p>
+Widget creation code must always be included in <tt>start_construction()</tt> and <tt>end_construction()</tt>.
+The latter finalizes the creation and displays the window.  The <tt>GUI.exec_loop()</tt> must be
+executed at least once to make everything working.
+</p>
+
+
+<!--------------------------------------------------->
+<h2><a name="ide"></a>3. An IDE to run the examples</h2>
+
+<p>
+Throughout this short course we will see many small examples. It is good to
+have a gui to paste and run them. Here it is:
+</p>
+
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+
+	W=GUI.Window ()
+	if W.BaseGUI == 'pyqt': fnt = 'terminal'
+	else: fnt = 'Courier'
+	W.start_construction ()
+	W.open_vbox ()
+	W.editor (name='EDDIE', font=fnt, dims=(80,20))
+	W.open_hbox ()
+	W.button (text='Run It!', cmd='exec self.master.EDDIE.get_text () in globals (), globals ()')
+	W.button (text='Clear', cmd='self.master.EDDIE.set_text ("")')
+	W.close_box ()
+	W.close_box ()
+	W.end_construction ()
+	GUI.exec_loop ()
+
+</pre></td></tr></tbody></table>
+
+<p>
+Run it. You can paste examples from below and click on 'Run it' to run them
+and see what happens.  In fact, for starters, paste the above editor text
+and run it if you want.  It is too an example!
+</p>
+
+<!--------------------------------------------------->
+<h2><a name="call"></a>4. Callback mechanism</h2>
+
+<p>
+The button and several other widgets can execute callback code. The code can be a
+string or a function.  In the editor example the code is a string and this string
+is exec'd.  If we want to use functions we would also like to make them members
+of the Window instance.  For that the famous <tt>transplant</tt> class is very useful:
+it takes a function and makes it an instance method.  Here is the editor
+where this time the button's command is a function.
+</p>
+
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+
+	class transplant: 
+	   def __init__(self, method, host, method_name=None):
+	      self.host = host
+	      self.method = method
+	      setattr(host, method_name or method.__name__, self)
+	   def __call__(self, *args, **kwargs):
+	      nargs = [self.host]
+	      nargs.extend(args)
+	      return apply(self.method, nargs, kwargs)
+
+	def RUNCMD (self):
+	    exec self.EDDIE.get_text () in globals (), globals ()
+
+	W=GUI.Window ()
+	# make RUNCMD a method of W
+	<b>transplant (RUNCMD, W)</b>
+	if W.BaseGUI == 'pyqt': fnt = 'terminal'
+	else: fnt = 'Courier'
+	W.start_construction ()
+	W.open_vbox ()
+	W.EDDIE = W.editor (font=fnt, dims=(80,20))
+	W.open_hbox ()
+	W.button (text='Run It!', cmd=W.RUNCMD)
+	W.button (text='Clear', cmd='self.master.EDDIE.set_text ("")')
+	W.close_box ()
+	W.close_box ()
+	W.end_construction ()
+	GUI.exec_loop ()
+
+</pre></td></tr></tbody></table>
+
+<p>
+It is very important to understand that in the case the code is a string,
+it is executed in the namespace of the *module* and therefore it cannot
+access names from the global namespace -- unlike functions.  The <tt>
+transplant</tt> class is part of the <tt>Window</tt> class
+(<tt>Dialog</tt>, <tt>Sheet</tt>), and can be invoked like this:
+</p>
+
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+	W.transplant (RUNCMD)
+</pre></td></tr></tbody></table>
+
+<!--------------------------------------------------->
+<h2><a name="button"></a>5. <tt>button</tt> widget</h2>
+
+<table border="0" bgcolor="#11beef" width="100%"><tbody><tr><td> <pre class="programlisting">
+ W.button (<b>name</b>=None, <b>text</b>='', <b>cmd</b>=None, <b>rclick</b>=None)
+</pre></td></tr></tbody></table>
+
+<table border="0" bgcolor="#d0e1e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+Attributes:
+<b>
+  .master
+  .code
+  .rclick
+  .enable()
+  .disable()
+</b>
+</pre></td></tr></tbody></table>
+
+<p> <dl>
+<dt>	<tt><b>name</b></tt>: is the name of the button. We give a name to a button if
+	  we want to inspect or change its parameters from other widgets.
+	 Also, it is possible to generate the name manually. For instance:
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+		W.button (name='B1')
+</pre></td></tr></tbody></table>
+ 	 is the same as:
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+		W.B1 = W.button ()
+</pre></td></tr></tbody></table>
+<dt>	<tt><b>text</b></tt>: is the label of the button. A button's label cannot be
+	  changed!
+<dt>	<tt><b>cmd</b></tt>: the code that will be executed when the button is clicked.
+<dt>	<tt><b>rclick</b></tt>: the code to be executed when a button is right-clicked.
+</dl></p>
+
+<p>
+	<tt>cmd</tt> and <tt>rclick</tt> can be functions or strings. In the case they
+	are strings, they will be executed in a method of the button instance.
+	Therefore in this case in order to access things from the Window
+	the member <tt>master</tt> has to be used.
+</P><p>
+	An example with a button that increments a value and prints it and also
+	prints its code:
+</p>
+
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+	 CMD="""
+	 self.master.counter += 1
+	 print self.master.counter, 'My code is:', self.code
+	 """
+
+	 W=GUI.Window ()
+	 W.counter = 0
+	 W.start_construction ()
+	 W.button (text='Inc Unlimited', cmd=CMD)
+	 W.end_construction ()
+	 GUI.exec_loop ()
+
+</pre></td></tr></tbody></table>
+
+<p>
+</p>
+
+<!--------------------------------------------------->
+<h2><a name="place"></a>6. Widget Placement</h2>
+
+<table border="0" bgcolor="#11beef" width="100%"><tbody><tr><td> <pre class="programlisting">
+ W.open_vbox (<b>text</b>=None)
+ W.open_hbox (<b>text</b>=None)
+ W.close_box ()
+ W.separator ()
+</pre></td></tr></tbody></table>
+
+<p>
+	<tt>vbox</tt> and <tt>hbox</tt> are vertical and horizontal placement containers.
+	All widgets generated between an <tt>open_[vh]box()</tt> and a <tt>close_box()</tt>
+	are placed inside this container.  If <tt><b>text</b></tt> is passed then the
+	container box will have a visible outline around it and a title
+	which is text. <br>
+	The <tt>separator</tt> is a vertical or horizontal line (depending on
+	the current open container) which separates elements visually.
+	<br><small>
+	[ separators not implemented in wx ] </small>
+<p>
+
+<p> An example of placing three buttons :</p>
+
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+	W=GUI.Window ()
+	W.start_construction ()
+	W.open_vbox ()
+	if 1:
+	 W.open_hbox ()
+	 if 1:
+	  W.button (name='B1', text='Button 1', cmd='print 1')
+	  W.button (text='Button 2', cmd='print 2')
+	 W.close_box ()
+	 W.button (text='Button 1', cmd='print "The code of button 1 is", self.master.B1.code')
+	W.close_box ()
+	W.end_construction ()
+	GUI.exec_loop ()
+</pre></td></tr></tbody></table>
+
+<!--------------------------------------------------->
+<h2><a name="check"></a>7. <tt>checkbutton</tt> widget</h2>
+
+<table border="0" bgcolor="#11beef" width="100%"><tbody><tr><td> <pre class="programlisting">
+ W.checkbutton (<b>name</b>=None, <b>text</b>='', <b>cmd</b>='', <b>active</b>=False)
+</pre></td></tr></tbody></table>
+
+<table border="0" bgcolor="#d0e1e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+Attributes:
+<b>
+ .master
+ .cmd
+ .active
+ .set_active (state)
+ .enable()
+ .disable()
+</b>
+</pre></td></tr></tbody></table>
+
+<p>
+	The command <tt>cmd</tt> will be executed each time the check button's
+	state is toggled. A checkbutton widget has the attributes
+	<tt>active</tt> and <tt>set_active (value)</tt>.  For example, a check button which
+	reports its state when it's toggled and a button which when clicked
+	sets the checkbutton to 'ok':
+</p>
+
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+	W=GUI.Window ()
+	W.start_construction ()
+	W.checkbutton (name='CB', text='Next time?', cmd='print "State:", self.active')
+	W.button (text='I Agree', cmd='self.master.CB.activate (1)')
+	W.end_construction ()
+	GUI.exec_loop ()
+</pre></td></tr></tbody></table>
+
+<!--------------------------------------------------->
+<h2><a name="label"></a>8. <tt>label</tt> widget</h2>
+
+<table border="0" bgcolor="#11beef" width="100%"><tbody><tr><td> <pre class="programlisting">
+ W.label (<b>name</b>=None, <b>text</b>='label')
+</pre></td></tr></tbody></table>
+
+<table border="0" bgcolor="#d0e1e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+Attributes:
+<b>
+ .set_text (text)
+ .get_text ()
+</b>
+</pre></td></tr></tbody></table>
+
+<p>
+	A label is a dummy area with a message.
+</p>
+
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+	W=GUI.Window ()
+	W.start_construction ()
+	W.label (name='L', text='A Label')
+	W.button (text='Do', cmd='self.master.L.set_text (self.master.L.get_text () + "*")')
+	W.end_construction ()
+	GUI.exec_loop ()
+</pre></td></tr></tbody></table>
+
+<!--------------------------------------------------->
+<h2><a name="radio"></a>9. Radio buttons</h2>
+
+<table border="0" bgcolor="#11beef" width="100%"><tbody><tr><td> <pre class="programlisting">
+ W.open_radio (<b>name</b>=None, <b>cmd</b>=None)
+ W.radio (<b>name</b>=None, <b>text</b>='', <b>active</b>=False)
+ W.close_radio ()
+</pre></td></tr></tbody></table>
+
+<table border="0" bgcolor="#d0e1e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+Attributes:
+<b>
+ .master
+ .cmd
+ .current
+ .activate (name)
+ .enable(name)
+ .disable(name)
+</b>
+</pre></td></tr></tbody></table>
+
+<p>
+	Radio buttons are groupped very much like the container boxes.
+	The <tt>W.radio()</tt> command must be executed within an <tt>W.open_radio()</tt>
+	and a <tt>W.close_radio()</tt> segment.  There is only one widget actually
+	generated and that is with the <tt>open_radio</tt> command. <tt><b>name</b></tt> is
+	the name of the widget and <tt><b>cmd</b></tt> the command that will be
+	executed each time the active radio button is changed.  The
+	<tt>W.radio()</tt> command just adds a name-value pair to the radio
+	group. The user sees the 'value' part and the progammer the 'name'
+	part of a radio button.
+</p>
+
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+	 W=GUI.Window ()
+	 W.start_construction ()
+	 W.open_radio (name='RBG', cmd='print "the active radio is", self.current')
+	 if 1:
+	  W.radio ('FM', "FM frequencies")
+	  W.radio ('AM', "AM rocks", True)
+	  W.radio ('OFF', "Turn it off")
+	 W.close_radio ()
+	 W.button (text="Turn Off Damn Thing", cmd="self.master.RBG.activate ('OFF')")
+	 W.end_construction ()
+	 GUI.exec_loop ()
+</pre></td></tr></tbody></table>
+
+<p>
+	As you will see if you execute the above example, the message "the
+	active radio is:" is printed each time the active radio button is
+	changed, even if it is changed indirectly from the button.
+</p>
+
+<!--------------------------------------------------->
+<h2><a name="toggle"></a>10. <tt>tbutton</tt> widget</h2>
+
+<table border="0" bgcolor="#11beef" width="100%"><tbody><tr><td> <pre class="programlisting">
+ W.tbutton (<b>name</b>=Nome, <b>text</b>='', <b>cmdact</b>=None, <b>cmddeact</b>=None, <b>active</b>=0)
+</pre></td></tr></tbody></table>
+
+<table border="0" bgcolor="#d0e1e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+Attributes:
+<b>
+ .master
+ .cmdact
+ .cmddeact
+ .toggle ()
+ .isOn ()
+ .enable()
+ .disable()
+</b>
+</pre></td></tr></tbody></table>
+
+<p>
+	The toggle button's <tt><b>cmdact</b></tt> will be executed each time the button
+	is "pressed" and the <tt><b>cmddeact</b></tt> each time it's "unpressed".
+</p>
+
+<!--------------------------------------------------->
+<h2><a name="text"></a>11. <tt>textentry</tt> widget</h2>
+
+<table border="0" bgcolor="#11beef" width="100%"><tbody><tr><td> <pre class="programlisting">
+ W.textentry (<b>name</b>=None, <b>text</b>='', <b>length</b>=0, <b>cmd</b>=None, <b>label</b>=None)
+</pre></td></tr></tbody></table>
+
+<table border="0" bgcolor="#d0e1e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+Attributes:
+<b>
+ .master
+ .code
+ .text ()
+ .set_text (text)
+ .enable()
+ .disable()
+</b>
+</pre></td></tr></tbody></table>
+
+<p>
+	This is a text entry.  A goal in the next version is to create
+	and advanced realine. Anyway, for now, <tt><b>cmd</b></tt> is executed each time
+	enter is pressed.  <tt><b>length</b></tt> specifies the visual length of
+	the entry in characters.  Because characters may be non fixed
+	this is an approximation.  A length zero means that the toolkit
+	is free to size the widget as it wants.
+</p>
+
+<p> Here is an example of a button, a text entry that changes the button's
+code to whatever is typed in it and another button which prints the current
+code of the first button:</p>
+
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+	def ENTRY_CMD (self):
+	    self.B1.code = self.ENT.text()
+	    self.ENT.set_text ('')
+
+	W=GUI.Window ()
+	transplant (ENTRY_CMD, W)
+	W.start_construction ()
+	W.open_vbox ()
+	if 1:
+	 W.open_hbox ()
+	 if 1:
+	  W.button (name='B1', text='CLICK ME!', cmd='print "thanks"')
+	  W.button (text='Code of button 1', cmd='print "it is:", self.master.B1.code')
+	 W.close_box ()
+	 W.separator ()
+	 W.textentry (name='ENT', label='Enter new code for B1', cmd=W.ENTRY_CMD)
+	W.close_box ()
+	W.end_construction ()
+	GUI.exec_loop ()
+
+</pre></td></tr></tbody></table>
+
+<!--------------------------------------------------->
+<h2><a name="editor"></a>12. <tt>editor</tt> widget</h2>
+
+<table border="0" bgcolor="#11beef" width="100%"><tbody><tr><td> <pre class="programlisting">
+ W.editor (<b>name</b>=None, <b>dims</b>=(0,0), <b>font</b>=None, <b>wrap</b>=0, <b>editable</b>=True)
+</pre></td></tr></tbody></table>
+
+<table border="0" bgcolor="#d0e1e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+Attributes:
+<b>
+ .master
+ .get_text ()
+ .set_text (text)
+ .set_editable (value)
+ .disable ()
+ .enable ()
+</b>
+</pre></td></tr></tbody></table>
+
+<p>
+	That is a simple text editor/viewer.
+<dd>
+<dt>	<tt><b>dims</b></tt>: is a tuple of the desired dimensions of the editor in
+	 characters. A value of zero means that the specific dimension
+	 will be what the toolkit wants.
+<dt>	<tt><b>font</b></tt>: is kinda complex. There is no real agreement between
+	 pygtk, pyqt and wxpython. Generally, something like 'Courier 10'
+	 should work here.  Because pygtk and wxpython share pango they
+	 agree on most strings.  pango on the other hand doesn't have
+	 terminal fonts, so 'terminal' is a good choice for editing
+	 with fixed size in pyqt (non-fixed fonts are for girl's
+	 diaries afterall).
+<dt>	<tt><b>wrap</b></tt>: is 0 for no wrap, 1 for character wrap and 2 for word wrap
+<dt>	<tt><b>editable</b></tt>: tells whether the text can be edited by the user.
+	 the text can always be altered by the code with <tt>set_text()</tt> though.
+</dd>
+</p>
+
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+	W=GUI.Window ()
+	if W.BaseGUI == 'pyqt': fnt = 'terminal'
+	else: fnt = 'Courier'
+	W.start_construction ()
+	W.open_vbox ()
+	W.editor (name='EDDIE', font=fnt, dims=(80,20))
+	W.open_hbox ()
+	W.button (text='Run It!', cmd='exec self.master.EDDIE.get_text () in globals (), globals ()')
+	W.button (text='Clear', cmd='self.master.EDDIE.set_text ("")')
+	W.close_box ()
+	W.close_box ()
+	W.end_construction ()
+	GUI.exec_loop ()
+</pre></td></tr></tbody></table>
+
+<!--------------------------------------------------->
+<h2><a name="image"></a>13. <tt>image</tt> widget</h2>
+
+<table border="0" bgcolor="#11beef" width="100%"><tbody><tr><td> <pre class="programlisting">
+ W.image (<b>name</b>=None, <b>filename</b>=None)
+</pre></td></tr></tbody></table>
+
+<table border="0" bgcolor="#d0e1e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+Attributes:
+<b>
+ .load (filename)
+</b>
+</pre></td></tr></tbody></table>
+
+<p>
+	That is a primitive image displayer. The <tt>load</tt> method doesn't work in qt
+	It's mainly used to display the Twilight GUI logo. This widget needs serious
+	improvements.
+</p>
+
+<!--------------------------------------------------->
+<h2><a name="split"></a>14. <tt>splitter</tt> views</h2>
+
+<table border="0" bgcolor="#11beef" width="100%"><tbody><tr><td> <pre class="programlisting">
+ self.hsplitter ()
+ self.vsplitter ()
+</pre></td></tr></tbody></table>
+
+<p>
+	The splitter is a placement command which separates two widgets by a
+	bar which the user can drag, consequently, making the one widget
+	smaller and the other bigger, as he or she whishes at the current
+	time they are working on their computer.  The splitter applies
+	for the next two widgets that will be created.  The splitter
+	DOESN'T work in wxpython yet and hbox, vbox will be used instead.
+	An example with three editors in splitters:
+</p>
+
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+	 W=GUI.Window ()
+	 W.start_construction ()
+	 W.hsplitter ()
+	 if 1:
+	  W.vsplitter ()
+	  if 1:
+	   W.editor ()
+	   W.editor ()
+	  W.editor ()
+	 W.end_construction ()
+	 GUI.exec_loop ()
+</pre></td></tr></tbody></table>
+
+<!--------------------------------------------------->
+<h2><a name="list"></a>15. <tt>listbox</tt> widget</h2>
+
+<table border="0" bgcolor="#11beef" width="100%"><tbody><tr><td> <pre class="programlisting">
+ W.listbox (<b>name</b>=None, <b>gcode</b>=None, <b>colnam</b>=[''], <b>scode</b>=None, <b>ecode</b>=None, <b>dims</b>=(0,0), <b>rclick</b>=None)
+</pre></td></tr></tbody></table>
+
+<table border="0" bgcolor="#d0e1e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+Attributes:
+<b>
+ .master
+ .row
+ .reload (code=None)
+ .enable ()
+ .disable ()
+</b>
+Listbox Creation:
+<b>
+ .addrow (data)
+</b>
+</pre></td></tr></tbody></table>
+
+<p>
+	The listbox is TG is very simple and it is used to reflect some
+	internal python data.  A list is loaded with the <tt><b>gcode</b></tt> argument
+	which can be a string or a function.  The code in <tt>gcode</tt> can call
+	the member <tt><b>addrow</b></tt> to addrows to the list, and that's it.
+	After that it is not possible to add extra rows or remove rows
+	from the list once it has been created.  The list can only be
+	<tt>reload()</tt>ed in which case it will be emptied and the <tt>gcode</tt> will
+	be called again to refill the list.
+</p>
+<dd>
+<dt>	<tt><b>colnam</b></tt>: is a sequence of strings which gives the names of the
+	columns of the list (and consequently their count)
+<dt>	<tt><b>scode</b></tt>: will be executed each time an element is selected.
+<dt>	<tt><b>ecode</b></tt>: each time an element is activated (double click or return)
+<dt>	<tt><b>rclick</b></tt>: each time an element is clicked with the right button
+<dt>	<tt><b>dims</b></tt>: specifies the dimensions of the listbox in characters.
+</dd>
+<p>
+	Row data added with <tt>addrow</tt>: In lists and trees we want not only
+	the visible column contents but often our own extra data accossiated
+	with each row.  For that the argument of <tt>addrow</tt> must be a
+	sequence whos first argument is a sequence of the values.
+	In the case a callback is invoked (<tt>scode</tt>, <tt>ecode</tt> or <tt>rclick</tt>), the
+	member <tt>self.row</tt> will be set to the entire data sequence that
+	was used in <tt>addrow</tt>.  Ok.  Example.
+</p>
+
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+	 # make a listbox with the keys of globals() and a viewer to show their values
+
+         def MAKELIST (self):
+             lst = globals ().keys ()
+             lst.sort ()
+             for i in lst:
+                self.addrow ([[i]])
+
+         def SHOWKEY (self):
+             self.E.set_text (repr (globals ()[<b>self.L.row</b> [0][0]]))
+
+         W=GUI.Window ()
+         transplant (SHOWKEY, W)
+         W.start_construction ()
+         W.hsplitter ()
+         if 1:
+          W.listbox (name='L', colnam=['keys'], gcode=MAKELIST, scode=W.SHOWKEY, dims=(20,10))
+          W.editor (name='E', editable=False, dims = (40, 10))
+         W.end_construction ()
+         GUI.exec_loop ()
+</pre></td></tr></tbody></table>
+
+<p>
+	We should note two things: first, the list is not sorted.  Actually in Qt it
+	is and if we click on columns we select the sort column.  In pygtk and
+	wxpython the elements are not sorted, so we'd better sort them to be sure.
+	Secondly, the <tt><b>gcode</b></tt> argument is special.  If a plain function is passed
+	to it (not a method function), it is automatically attached to
+	the newly generated list instance.
+</p>
+
+<!--------------------------------------------------->
+<h2><a name="stree"></a>16. <tt>streebox</tt> widget (static tree)</h2>
+
+<table border="0" bgcolor="#11beef" width="100%"><tbody><tr><td> <pre class="programlisting">
+ W.streebox (<b>name</b>=None, <b>gcode</b>=None, <b>colnam</b>=[''], <b>scode</b>=None, <b>ecode</b>=None, <b>dims</b>=(0,0), <b>rclick</b>=None)
+</pre></td></tr></tbody></table>
+
+<table border="0" bgcolor="#d0e1e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+Attributes:
+<b>
+ .master
+ .row
+ .reload (code=None)
+ .enable ()
+ .disable ()
+</b>
+Listbox Creation:
+<b>
+ .sub ()
+ .addrow (data)
+ .unsub ()
+</b>
+</pre></td></tr></tbody></table>
+
+<p>
+	A tree is just like a list in almost everything, except that the
+	elements of the first column can be in a tree representation.
+	The static tree is the one that is entirely created with <tt>gcode</tt>,
+	and so it's not suitable for thousands of nodes (for example
+	a filesystem navigator).
+</p>
+
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+	 def MAKETREE (self):
+	    self.addrow ([['tmp']])
+	    self.addrow ([['home']])
+	    self.sub ()
+	    if 1:
+	     self.addrow ([['johnny']])
+	     self.addrow ([['jack']])
+	     self.sub ()
+	     if 1:
+	      self.addrow ([['src']])
+	     self.unsub ()
+	    self.unsub ()
+
+         W=GUI.Window ()
+         W.start_construction ()
+         W.streebox (colnam=['dirs'], gcode=MAKETREE)
+         W.end_construction ()
+         GUI.exec_loop ()
+</pre></td></tr></tbody></table>
+
+<br>
+<small> [ in wx, the tree's GOT to have a root, (TreeListCtrl) and for that
+	  there is an ugly '.' root for now ]</small>
+<!--------------------------------------------------->
+<h2><a name="tree"></a>17. <tt>treebox</tt> widget</h2>
+
+<table border="0" bgcolor="#11beef" width="100%"><tbody><tr><td> <pre class="programlisting">
+ W.treebox (<b>name</b>=None, <b>gcode</b>=None, <b>colnam</b>=[''], <b>scode</b<=None, <b>ecode</b>=None, <b>dims</b>=(0,0), <b>rclick</b>=None)
+</pre></td></tr></tbody></table>
+
+<table border="0" bgcolor="#d0e1e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+Attributes:
+<b>
+ .master
+ .row
+ .reload (code=None)
+ .enable ()
+ .disable ()
+</b>
+Listbox Creation:
+<b>
+ .addrow (data, expander=None)
+</b>
+</pre></td></tr></tbody></table>
+
+<p>
+	This is the real tree.  Just like the <tt>listbox</tt>, elements are
+	inserted with <tt>addrow</tt> from <tt><b>gcode</b></tt>.  Additionally, an element that
+	passes code (string or function) to the <tt><b>expander</b></tt> argument
+	of <tt>addrow</tt>, is a parent node and the expander code is invoked to
+	generate the children (with <tt>addrow</tt>) each time the user clicks
+	to expand the node.  Ok, this is fun.
+</p><p>
+	A filesystem navigator:
+</p>
+
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+	import os
+	import os.path
+
+	def EXPAND_DIR (self):
+	 self = self.L
+	 # the hidden data is the full pathname
+	 basedir = self.row [1]
+	 dirs=os.listdir (basedir)
+	 dirs.sort ()
+	 for i in dirs:
+	     fullname = basedir + '/' + i
+	     if os.path.isdir (fullname): 
+		self.addrow (((i,),fullname),<b>self.master.EXPAND_DIR</b>)
+	     else:
+		self.addrow (((i,),))
+
+	CODE="self.addrow ((('/',),'/'), <b>self.master.EXPAND_DIR</b>)"
+
+	W = GUI.Window ()
+	transplant (EXPAND_DIR, W)
+	W.start_construction ()
+	W.treebox (name='L', colnam = ['dir'], gcode = CODE, dims=(20,10))
+	W.end_construction ()
+	GUI.exec_loop ()
+</pre></td></tr></tbody></table>
+
+<!--------------------------------------------------->
+<h2><a name="pop"></a>18. <tt>popup</tt> command</h2>
+
+<table border="0" bgcolor="#11beef" width="100%"><tbody><tr><td> <pre class="programlisting">
+ W.popup (<b>code</b>, *args, **kwargs)
+</pre></td></tr></tbody></table>
+
+<table border="0" bgcolor="#d0e1e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+Menu Creation:
+<b>
+ .item (name, code)
+ .sub (name)
+ .unsub ()
+ .sep ()
+</b>
+</pre></td></tr></tbody></table>
+
+<p>
+The popup menu is normally not created during the window construction, but
+it 'pops up' when some event happens.  So we excpect the popup creation
+to happen in the code of a button or something like that.  The popup
+command is a method of the window instance nontheless.
+</p>
+
+<p>
+The <tt><b>code</b></tt> argument which can be a string or function (in case it's a plain
+function it will be attached to the popup), can invoke the members <tt>item()</tt>,
+<tt>sub()</tt>, <tt>unsub()</tt> and <tt>sep()</tt> to generate menu items, submenus
+and separators.
+</p>
+
+<p>
+A menubar can be done with buttons that make popups on click:
+</p>
+
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+	def FILEMENU (self):
+	    self.item ('New', 'print "New"')
+	    self.item ('Open', 'print "Open"')
+	    self.sep ()
+	    self.sub ('Send to')
+	    if 1:
+	     self.item ('Floppy disk', 'print "Floppy"')
+	    self.unsub ()
+	    self.sep ()
+	    self.item ('Exit', 'self.master.quit ()')
+
+	def POPUPCODE (self):
+	    self.popup (FILEMENU)
+
+	W = GUI.Window ()
+	transplant (POPUPCODE, W)
+	W.start_construction ()
+	W.open_vbox ()
+	W.open_hbox ()
+	W.button (text='File', cmd=W.POPUPCODE)
+	W.close_box ()
+	W.separator ()
+	W.editor (dims = (80,25))
+	W.close_box ()
+	W.end_construction ()
+	GUI.exec_loop ()
+</pre></td></tr></tbody></table>
+	
+<p>
+Just like the tree/list generation code, the <tt>code</tt> argument of the popup,
+if a global function shall be attached to the currently constucted
+popup instance.
+</P>
+
+<p>
+Popup menus, usually operate on some selected data.  For example, in
+the dir viewer example we would like to make a popup menu that does
+something with the selected file.  For that we need to pass values
+to the popup.  Any keyword arguments to <tt>popup()</tt> will be attached
+as values to the instance.  The dirviewer with a popup that prints
+the fullname of the selected file:
+</P>
+
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+	import os
+	import os.path
+
+	def EXPAND_DIR (self):
+	 self = self.L
+	 # the hidden data is the full pathname
+	 basedir = self.row [1]
+	 dirs=os.listdir (basedir)
+	 dirs.sort ()
+	 for i in dirs:
+	     fullname = basedir + '/' + i
+	     if os.path.isdir (fullname): 
+		self.addrow (((i,),fullname),self.master.EXPAND_DIR)
+	     else:
+		self.addrow (((i,),fullname))
+
+	def FILEMENU (self):
+	    self.item ('Print fullname', 'print "Fullname:", <b>self.fullname</b>')
+
+	def POPUPCODE (self):
+	    self.popup (FILEMENU, <b>fullname=self.L.row [1]</b>)
+
+	CODE="self.addrow ((('/',),'/'), self.master.EXPAND_DIR)"
+
+	W = GUI.Window ()
+	transplant (EXPAND_DIR, W)
+	transplant (POPUPCODE, W)
+	W.start_construction ()
+	W.treebox (name='L', colnam = ['dir'], gcode = CODE, dims=(20,10), rclick=W.POPUPCODE)
+	W.end_construction ()
+	GUI.exec_loop ()
+</pre></td></tr></tbody></table>
+
+<br><small>
+(in PyGTK you have to keep the right button pressed otherwise the menu closes.
+I don't know how to fix this)</small>
+
+<!--------------------------------------------------->
+<h2><a name="dialog"></a>19. modal <tt>Dialog</tt> windows</h2>
+
+<p>
+A dialog is a modal popup window that can be a message or a confirmation
+or whatever that freezes its background window until it gets a reply.
+The <tt>Dialog</tt> is a class just like <tt>Window</tt>.  Here is a confirmation dialog
+that appears each time we click on the 'Dangerous action button'.
+</p>
+
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+	def CONFIRM(self):
+	    D = GUI.Dialog (self)
+	    <b>D.ok</b> = False
+	    D.start_construction ()
+	    D.open_vbox ()
+	    D.label (text='Are you 100% sure?')
+	    D.open_hbox ()
+ 	    D.button (text='ok', cmd="<b>self.master.ok=True</b>; self.master.close()")
+	    D.button (text='Cancel', cmd='self.master.close()')
+	    D.close_box ()
+	    D.close_box ()
+	    D.end_construction ()	# this fires up the dialog box
+	    if <b>D.ok</b>:
+		print "Ok with me"
+	    else:
+		print "Canceled"
+
+	W = GUI.Window ()
+	transplant (CONFIRM, W)
+	W.start_construction ()
+	W.button (text='Dangerous action button', cmd=W.CONFIRM)
+	W.end_construction ()
+	GUI.exec_loop ()
+</pre></td></tr></tbody></table>
+
+<!--------------------------------------------------->
+<h2><a name="workspace"></a>20. Workspaces</h2>
+
+<table border="0" bgcolor="#11beef" width="100%"><tbody><tr><td> <pre class="programlisting">
+ W.tabworkspace (<b>name</b>=None)
+ W.MDIworkspace (<b>name</b>=None)
+</pre></td></tr></tbody></table>
+
+<p>
+The notebook and MDI workspaces are very experimental and still do not work
+very well.  Anyway they are workspaces inside which we can add pages (GUI
+pages) at runtime.  Like a small window manager inside our window.  The
+notebook is known as "tabs".  The MDI is only supported in QT.  wxPython is
+supposed to support MDI but it just opens tabs in another window here. 
+Maybe I missed <tt>--enable-mdi</tt> or something.  PyGTK doesn't have MDI and a
+notebook will be used instead.  Anyway.
+</p>
+
+<p>
+Then we have the class <tt>Sheet</tt> which is just like <tt>Window</tt> and <tt>Dialog</tt>.
+In its construction we must pass the name of the workspace where the sheet
+will be added.  Here is an example.  *Workspaces need serious fixing*
+</P>
+
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+	NT="""
+	self.settitle ('A page')
+	self.button (text='butto', cmd='self.master.RR.disable ("On")')
+	self.button (name='B', text='boggler', cmd='self.master.disable()')
+	self.editor (name='E',dims=(30,10))
+	self.open_radio (name='RR')
+	self.radio ('This', "This")
+	self.radio ('On', "Ons", active=1)
+	self.close_radio ()
+	self.E.set_text (self.workspace.master.NT)
+	"""
+
+	def NEWSHEET (self):
+	    GUI.Sheet (self.WS, NT)
+	    return	
+
+	W = GUI.Window ()
+	W.NT=NT
+	transplant (NEWSHEET, W)
+	W.start_construction ()
+	W.button (text='Make new sheet', cmd=W.NEWSHEET)
+	W.MDIworkspace (name='WS')
+	GUI.Sheet (W.WS, NT)
+	W.NEWSHEET ()
+	W.end_construction ()
+	GUI.exec_loop ()
+</pre></td></tr></tbody></table>
+<br>
+It just works.
+
+<!--------------------------------------------------->
+<h2><a name="file"></a>21. Higher level widgets</h2>
+
+<table border="0" bgcolor="#11beef" width="100%"><tbody><tr><td> <pre class="programlisting">
+ W.openFileDialog (name='')
+ W.saveFileDialog (name='')
+</pre></td></tr></tbody></table>
+
+<p>
+
+These can be invoked from callbacks.  They open custom pygtk/pyqt/wxpython
+advanced dialog widgets to read or save a file.  A string of the selected
+filename or None is returned when these are called.  PyGTK 2.4.0 has a neat
+advanced fileDialog which isn't used yet.  We should add wildcards and
+directory here in the future...
+
+</p>
+
+<p> Here is the code of the editor IDE that appears in the screenshot
+of the Twilight GUI homepage. It uses openFileDialog and saveFileDialog too: </P>
+
+<table border="0" bgcolor="#e0e0e0" width="100%"><tbody><tr><td> <pre class="programlisting">
+class transplant: 
+   def __init__(self, method, host, method_name=None):
+      self.host = host
+      self.method = method
+      setattr(host, method_name or method.__name__, self)
+   def __call__(self, *args, **kwargs):
+      nargs = [self.host]
+      nargs.extend(args)
+      return apply(self.method, nargs, kwargs)
+
+def readfile (fnm):
+    f=open (fnm, 'r')
+    txt = f.read()
+    f.close ()
+    return txt
+
+def writefile (fnm, txt):
+    f=open (fnm, 'w')
+    f.write (txt)
+    f.close ()
+
+def app ():
+ def NEWCMD(self):
+   self.ED.set_text('')
+   self.CURRENT_FILE='NewFile.py'
+   self.FILENAME.set_text ('NewFile.py')
+
+ def RELOADCMD(self):
+   self.ED.set_text (readfile (self.CURRENT_FILE))
+
+ def LOADCMD (self):
+    l = self.openFileDialog (name=self.CURRENT_FILE)
+    if l:
+        try:
+	    self.ED.set_text (readfile (l))
+	    self.FILENAME.set_text (l)
+	    self.CURRENT_FILE = l
+        except IOError:
+	    print "No such file"
+
+ def SAVEASCMD (self):
+    l = self.saveFileDialog (name=self.CURRENT_FILE)
+    if l:
+        try:
+	    writefile (l, self.ED.get_text ())
+	    self.FILENAME.set_text (l)
+	    self.CURRENT_FILE = l
+        except IOError:
+	    print "Failed save"
+
+ def SAVECMD(self):
+    D=self.MyGUI.Dialog (self)
+    D.ok = False
+    D.start_construction ()
+    D.open_vbox ()
+    D.label (text='Save file '+self.CURRENT_FILE+' ?')
+    D.open_hbox ()
+    D.button (text='ok', cmd="self.master.ok=True; self.master.close()")
+    D.button (text='Cancel', cmd='self.master.close()')
+    D.close_box ()
+    D.close_box ()
+    D.end_construction ()
+    if D.ok:
+        writefile (self.CURRENT_FILE, self.ED.get_text())
+
+ def RUNCMD (self):
+    x = self.LIBRADIO.current
+    print 'Running with ['+x+']'
+    for i in self.GUIList:
+	if i[0] == x:
+	    break
+    xx=self.ED.get_text ()
+    global GUI
+    TMP=GUI
+    GUI = i[1]
+    exec xx in globals (), globals ()
+    GUI.exec_loop ()
+    GUI=TMP
+
+ W = GUI.Window ()
+ W.MyGUI = GUI
+ W.CURRENT_FILE = 'Editor.py'
+ W.GUIList = GUIList
+ transplant (RUNCMD, W)
+ transplant (NEWCMD, W)
+ transplant (RELOADCMD, W)
+ transplant (SAVECMD, W)
+ transplant (SAVEASCMD, W)
+ transplant (LOADCMD, W)
+ if W.BaseGUI == 'pyqt': fnt = 'terminal'
+ else: fnt = 'Courier'
+ W.start_construction ()
+ W.settitle ('Editor IDE in '+W.BaseGUI)
+ W.open_vbox ()
+ if 1:
+  W.label (name='FILENAME', text=W.CURRENT_FILE)
+  W.open_hbox ()
+  if 1:
+   W.editor (name='ED', dims=(78,23), font = fnt)
+   W.open_vbox ('Run it with')
+   if 1:
+    W.open_radio (name='LIBRADIO')
+    if 1:
+     for i in GUIList:
+         W.radio (name=i[0], text=i[0], active=(GUI==i[1]))
+    W.close_radio ()
+    W.button (text="Run it!", cmd=W.RUNCMD)
+    W.image (name='IMG', filename='tw-logo.png')
+   W.close_box ()
+  W.close_box ()
+  W.open_hbox ()
+  if 1:
+   W.button (text='New', cmd=W.NEWCMD)
+   W.button (text='Reload', cmd=W.RELOADCMD)
+   W.button (text='Load', cmd=W.LOADCMD)
+   W.button (text='Save', cmd=W.SAVECMD)
+   W.button (text='Save As...', cmd=W.SAVEASCMD)
+   W.button (text='Quit', cmd='self.master.quit ()')
+  W.close_box ()
+ W.close_box ()
+ W.end_construction ()
+ W.ED.set_text (readfile (W.CURRENT_FILE))
+ GUI.exec_loop ()
+
+app ()
+</pre></td></tr></tbody></table>
+
+<html>

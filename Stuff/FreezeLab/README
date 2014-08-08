@@ -1,0 +1,69 @@
+Freezing pyvm apps
+==================
+
+About memfs://
+--------------
+
+pyvm has a builtin internal filesystem which is basically
+useful for freezing binaries. Memfs is not a real filesystem
+and for one, we can't chdir() into memfs, or use functions
+from the `os` module (`mkdir`, `remove`, etc) yet. It doesn't
+have timestamps, permissions, etc.  Memfs can be used only with
+absolute URLs.
+
+On the other hand, the good thing about memfs is that filenames
+with the `memfs://` prefix are understood by internal functions
+of the VM and therefore we can import modules, load dynamic
+libraries, etc.
+
+We _can_ use it as
+
+	open ('memfs://foo.txt', 'w').write ("HELLO!")
+	print open ('memfs://foo.txt).read ()
+
+but it is not really suggested to use memfs for such operations
+at the moment, and no-one said that it is more efficient.
+
+
+A Freezing example
+------------------
+
+You can type `pyvm freeze.py sample/`, then go to toolchain/pyvm
+and do:
+
+	make frozen
+	make
+	cp ~/bin/pyvm sample.exe
+	strip sample.exe
+	touch boot.c+
+	make
+
+That's the procedure to generate the frozen executable `sample.exe`.
+
+The script `freeze.py` basically generates the file `ICECUBE.c` from
+the given directory. This directory must include at least three things:
+
+	1) a file BIOS.pyc, which is the boot script of the frozen application.
+	   Use sample/BIOS.py as a starting point
+	2) a file Make.py, which can be used to prepare the files we'll need.
+	3) a file EXCLUDE which contains glob patterns about the files that
+	   should not be included in the icecube.
+
+After running `Make.py`, the freeze script will load all the files of the
+directory that do not math the EXCLUDE list into memfs, then covert memfs
+to a tuple, marshal it and save it as a C array.
+
+XXX: It seems that the `indent` program has trouble handling
+a very big `ICECUBE.c` file and it exhausts memory into
+oblivion.  Send e-mail to tell you what to do if `make frozen`
+freezes.
+
+
+Wouldn't zipimport suffice?
+---------------------------
+
+For loading modules, probably yes. But a frozen application might
+also contain precompiled DLLs, object files and possibly configuration
+files, data and other stuff.
+
+memfs is a clean solution for generating a self-contained executable.

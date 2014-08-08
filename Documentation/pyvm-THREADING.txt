@@ -1,0 +1,116 @@
+Threads in pyvm
+~~~~~~~~~~~~~~~
+
+* pyvm is stackless.
+
+Some theory:
+
+	When we say that "my computer is multitasking", it doesn't
+	really execute many task in parallel. The operating system
+	gives a timeslice to each tasks and juggles the tasks/threads.
+	Because the timeslice is small (10ms) this appears like
+	parallel execution.
+
+In a stacked VM when we have multiple threads the implementation has
+to generate a different "OS thread" for every "Py thread" and as a
+result each "vm context switching" is done with an "OS context switching"
+where the operating system switches the current process.
+
+In the stackless mode that is not needed. One OS thread can run multiple
+"Py threads" and do the switching of vm contexts itself. The advantage of
+this is speed and memory: that's probably the fastest way to execute
+multiple py-threads in a single-CPU boxen.
+
+Another great advantage of the stackless mode is that some things like
+semaphores, locks, etc are simpler and more efficient. Moreover we have
+much more control over the py-threads: we can freeze py-threads,
+send py-signals to py-threads, detect deadlocks, etc.
+
+
+* blocking calls.
+
+The stackless vm has one case it has trouble with: blocking system
+calls. For example suppose that a py-thread calls sleep(). sleep()
+will block the current thread until it's awaken. Same thing can happen
+for reading/writting file descriptors.
+
+To handle this pyvm will start a new OS-thread (or use one from the
+existing thread pool) to take over the VM while the current OS-thread
+is waiting for the system function to return. When the initial thread
+unblocks it will request back the control of the VM. When the second
+thread realizes this it will relinquish the VM and go back to the pool.
+
+So pyvm uses multiple OS-threads as well:
+OS threads good for blocking. OS threads bad for performance.
+
+
+* not stackless.
+
+pyvm is not always stackless. There are cases where code deeply
+nested in C needs to call a python function. Such a case is the __cmp__
+and __hash__ methods which will be invoked from the dictionary lookup
+code (which is done in C because in most cases where we care about
+speed won't use classes with __cmp__ and __hash__).
+
+For those things (__cmp__, __hash__, __eq__, operator overloadings)
+the stackless principle is broken and the main interpreter loop
+is reentered recusrively. This is the "preemptive mode". In the
+preemptive mode the VM is not allowed to switch py-threads stacklessly
+and as a result threading becomes non-stackless and less efficient.
+
+Preemptive functions are:
+* __hash__, __cmp__, __eq__ when called from C code (dictionaries
+  list.index, list.remove, etc)
+* operator overloading (__getitem__, __getattr__, __add__).
+  However, it is possible to compile pyvm in such a way that
+  preemption is avoided in those cases; it's not done by default
+  because it is believed that there are no real programs that
+  do need multiple threads AND do heavy work in preemption.
+* property descriptors
+* Callbacks from C into python (DLL module)
+
+Locks (py-locks), in normal stackless operation are not blocking
+calls: the VM just removes the current co-routine from the "running"
+list and puts it back when the lock is released.
+In preemption locks are blocking: If in preemptive mode the VM
+tries to acquire a lock it will block on a real semaphore and
+the VM will continue with stackless execution with another OS
+thread until the lock is released.  Shortly, this is good news!
+When we have to do a lot of work in preemption we can just
+pass a request to the main loop and wait on a lock until the
+result is ready.
+
+
+* scheduling
+
+The vm counts an internal measure of 'ticks' which is incremented
+on every JUMP opcode (the rationale is that a program without
+JUMPs won't get very far).  About every 500 ticks, the internal
+scheduler is visited to switch to another thread.  This can lead
+to an unfair situation when between the jumps we do operations
+that take a lot of time,
+
+	for i in xrange (100000):
+	    call_very_expensive_builtin ()
+
+The way to deal with this is thread.sched_yield() which sets the
+ticks to the limit and therefore the next JUMP will invoke the
+scheduler.
+
+
+* servers
+
+Stackless has one problem.  That is that if we have one process that
+runs a stackless vm with 100 py-threads and two other processes that
+run other programs, then then 100 py-threads only work at the 1/3 of
+the CPU.  Generally, this should only affect people who run a server
+in python in a heavyly loaded system.  pyvm currently does not solve
+that.  One solution is that the sysadmin will either give a higher
+priority to the vm or make sure no other programs run. Just know that
+benchmarking stackless in a loaded system not escpecially tweaked for
+this will not give the suprisingly good performance that was expected.
+
+
+* GIL
+
+pyvm is blessed with a GIL.

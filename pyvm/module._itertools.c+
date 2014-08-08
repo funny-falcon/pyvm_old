@@ -1,0 +1,367 @@
+#include "dynlib.h"
+
+/*
+ * _itertools
+ *
+ *	this module has some delicate optimizations.
+ *	the fact is that, calling preempt_pyvm *costs*.  the alternative is to
+ *	bring the implementation down to bytecode level as a generator.  This costs
+ *	if there are "if"s and "tuple building"!
+ *
+ *	OTOH, if our "next" or "predicate" calls are builtins, the bytecode level
+ *	is then slower.
+ *	
+ *	The best optimization can be achieved by a hybrid which supports both
+ *	methods and selects which one to do.
+ *	Also, we return 'xnext' instead of 'next' when this is allowed. See
+ *	dropwhiler.
+ */
+
+static inline __object__ *obj_no_Ctx (__object__ *o)
+{
+	return o == &CtxSw ? preempt_pyvm (CtxSw.vm) : o;
+}
+
+/* izip */
+
+static class izipper : iteratorBase, wnext
+{
+	int n;
+	REFPTR rz;
+    public:
+	izipper (REFPTR [], int);
+	__object__ *xnext ();
+	void print ()		{ print_out ("izipper"); }
+trv	void traverse ()	{ rz.traverse_ref (); iteratorBase.traverse (); }
+};
+
+izipper.izipper (REFPTR argv[], int argc)
+{
+	n = argc;
+	Tuplen *T = new Tuplen __sizector (argc), *T2 = new Tuplen __sizector (argc);
+	for (int i = 0; i < argc; i++) {
+		T2->__xvvitem__ (i);
+		T->__xvvitem__ (i);
+	}
+	rz.ctor (T2);
+	iteratorBase.ctor (T);
+	for (int i = 0; i < argc; i++)
+		T->__xinititem__ (i, obj_no_Ctx (argv [i]->iter ()));
+}
+
+__object__ *izipper.xnext ()
+{
+	int n = n, i;
+	Tuplen *iterables = obj.as_tuplen, *T;
+
+	if (rz->refcnt == 1) {
+		T = rz.as_tuplen;
+		for (i = 0; i < n; i++)
+			T->__xsetitem__ (i, iterables->__xgetitem__ (i)->next ());
+	} else {
+		T = new Tuplen NoneCtor (n);
+		rz = T;
+		for (i = 0; i < n; i++)
+			T->__xinititem__ (i, iterables->__xgetitem__ (i)->next ());
+	}
+
+	return T;
+}
+
+_module __object__ *izip__itertools (REFPTR argv [], int argc)
+{
+	return new izipper (argv, argc);
+}
+
+/* dropwhile */
+
+static class dropwhiler : iteratorBase, wnext
+{
+	int ok;
+	REFPTR fn;
+    public:
+	dropwhiler (__object__*, __object__*);
+	__object__ *xnext ();
+trv	void traverse ()	{ fn.traverse_ref (); iteratorBase.traverse (); }
+};
+
+dropwhiler.dropwhiler (__object__ *f, __object__ *it)
+{
+	fn.ctor (f);
+	iteratorBase.ctor (it->iter ());
+	ok = 0;
+}
+
+__object__ *dropwhiler.xnext ()
+{
+	if_likely (ok)
+		return obj->xnext ();
+
+	REFPTR xx [] = { &None, &None };
+	for (;;) {
+		xx [1] = obj->next ();
+		fn->call (xx, xx, 1);
+		if (xx [0].o == &CtxSw)
+			xx [0].ctor (preempt_pyvm (CtxSw.vm));
+		if (BoolObj.isinstance (xx [0].o) ? xx [0].o == &FalseObj : !xx [0]->Bool ()) {
+			ok = 1;
+			return xx [1].Dpreserve ();
+		}
+	}
+}
+
+_module __object__ *dropwhile__itertools (REFPTR argv [])
+{
+	return new dropwhiler (argv [0].o, argv [1].o);
+}
+
+/* repeat */
+
+static class repeater : iteratorBase
+{
+	int n, i;
+    public:
+	repeater (__object__*, int);
+	__object__ *xnext ();
+};
+
+repeater.repeater (__object__ *o, int times)
+{
+	n = times;
+	i = 0;
+	iteratorBase.ctor (o);
+}
+
+__object__ *repeater.xnext ()
+{
+	if (i++ < n)
+		return obj.o;
+	RaiseStopIteration ();
+}
+
+_module __object__ *repeat__itertools (REFPTR argv [], int argc)
+{
+	return new repeater (argv [0].o, argc == 2 ? IntObj.fcheckedcast (argv [1].o)->i : $LONG_MAX);
+}
+
+/* islice */
+
+static class islicer : iteratorBase, wnext
+{
+	int i, step, start, stop;
+    public:
+	islicer (REFPTR [], int);
+	__object__ *xnext ();
+	void print ()		{ print_out ("islicer"); }
+};
+
+islicer.islicer (REFPTR argv [], int argc)
+{
+	step = 1;
+	if (argc == 2) {
+		start = 0;
+		stop = argv [1].o == &None ? -1 : IntObj.fcheckedcast (argv [1].o)->i;
+	} else {
+		start = IntObj.fcheckedcast (argv [1].o)->i;
+		stop = argv [2].o == &None ? -1 : IntObj.fcheckedcast (argv [2].o)->i;
+		if (argc == 4)
+			step = IntObj.fcheckedcast (argv [3].o)->i;
+	}
+	iteratorBase.ctor (argv [0]->iter ());
+	i = 0;
+}
+
+__object__ *islicer.xnext ()
+{
+	if_unlikely (i < start) {
+		REFPTR xx;
+		for (; i < start; i++)
+			xx = obj->next ();
+		if (i < stop || stop == -1)
+			return obj->xnext ();
+	}
+
+	if_unlikely (i >= stop && stop != -1)
+		RaiseStopIteration ();
+
+	if (step > 1) {
+		REFPTR xx;
+		for (int j = 1; j < step; j++)
+			xx = obj->next ();
+	}
+		
+	i += step;
+	if_unlikely (i > stop && stop != -1)
+		RaiseStopIteration ();
+
+	return obj->xnext ();
+}
+
+_module __object__ *islice__itertools (REFPTR argv [], int argc)
+{
+	return new islicer (argv, argc);
+}
+
+/* imap
+ *	imap is a hybrid.  It can be executed either with bytecode (see pyby.c+)
+ *	or in lwc-C. The criteria is whether the <function> object is a builtin
+ *	or bytecode. In the case imap is done with bytecode, it invokes izip.
+ *	It is izip's responsibility to do the job as a hybrid too.
+ *	Right now, izip is builtin only.
+ */
+
+static class imapper : iteratorBase, wnext
+{
+	REFPTR iterables;
+	REFPTR argtuple;
+	int argn;
+    public:
+	imapper (REFPTR[], int);
+	__object__ *xnext ();
+trv	void traverse ()	{ iterables.traverse_ref (); argtuple.traverse_ref ();
+				  iteratorBase.traverse (); }
+};
+
+imapper.imapper (REFPTR argv [], int argc)
+{
+	iteratorBase.ctor (argv [0].o);
+	iterables.ctor (new Tuplen __sizector (argc - 1));
+	argtuple.ctor (new Tuplen __sizector (argc));
+	argn = argc - 1;
+	for (int i = 1; i < argc; i++) {
+		iterables.as_tuplen->__xvvitem__ (i - 1);
+		argtuple.as_tuplen->__xvvitem__ (i);
+	}
+	argtuple.as_tuplen->__xvvitem__ (0);
+	for (int i = 1; i < argc; i++)
+		iterables.as_tuplen->__xinititem__ (i - 1, obj_no_Ctx (argv [i]->iter ()));
+}
+
+__object__ *imapper.xnext ()
+{
+	int i = 0, j = argn;
+	Tuplen *T = argtuple.as_tuplen;
+	for (i = 0; i < j; i++)
+		T->__xsetitem__ (i + 1, iterables.as_tuplen->__xgetitem__ (i)->next ());
+	obj->call (T->data [0], T->data, j);
+	return T->data [0].o;
+}
+
+extern PyFuncObj *imap_func (__object__*);
+static __object__ *izip_callable;
+
+_module __object__ *imap__itertools (REFPTR argv [], int argc)
+{
+	if (argv [0]->vf_flags & VF_VMEXEC) {
+		/** Bytecode **/
+		REFPTR xx;
+		imap_func (izip_callable)->call (xx, argv - 1, argc);
+		return xx.Dpreserve ();
+	}
+	return new imapper (argv, argc);
+}
+
+/* tee
+ *	tee only does 2-way tee
+ *	we should do n>2 in bytecode which combines multiple 2-way tees
+ */
+
+static class tee : iteratorBase//__container__
+{
+	const TLINE 27;
+	REFPTR iterable;
+	REFPTR buffer;
+	int leader, first, last, finished;
+    public:
+	tee (__object__*);
+	__object__ *giveto (int);
+	void print ()		{ }
+trv	void traverse ()	{ iterable.traverse_ref (); buffer.traverse_ref ();
+				  iteratorBase.traverse (); }
+};
+
+static class teeiter : iteratorBase, wnext
+{
+	int my_rank;
+    public:
+	teeiter (__object__*, int);
+	__object__ *xnext ();
+};
+
+teeiter.teeiter (__object__ *T, int r)
+{
+	iteratorBase.ctor (T);
+	my_rank = r;
+}
+
+__object__ *teeiter.xnext ()
+{
+	return tee.cast (obj.o)->giveto (my_rank);
+}
+
+tee.tee (__object__ *i)
+{
+	iteratorBase.ctor (&None);//__container__.ctor ();
+	buffer.ctor (new ListObj);
+	iterable.ctor (i->iter ());
+	leader = first = last = finished = 0;
+}
+
+__object__ *tee.giveto (int t)
+{
+	if (first == last)
+		leader = t;
+
+	if (leader == t) {
+		__object__ *o;
+		if (finished)
+			RaiseStopIteration ();
+		finished = 1;
+		o = iterable->next ();
+		finished = 0;
+		if (last % TLINE == 0)
+			buffer.as_list->append (new ListObj);
+		ListObj.cast (buffer.as_list->__xgetitem__ (last++ / TLINE))->append (o);
+		return o;
+	}
+
+	REFPTR ret = ListObj.cast (buffer.as_list->__xgetitem__ (first / TLINE))
+			->__xgetitem__ (first % TLINE);
+
+	if (first == TLINE - 1) {
+		REFPTR pop = buffer.as_list->pop (0);
+		first -= TLINE;
+		last -= TLINE;
+	} else ListObj.cast (buffer.as_list->__xgetitem__ (first / TLINE))
+			->__xsetitem__ (first % TLINE, &None);
+
+	first++;
+	return ret.Dpreserve ();
+}
+
+_module __object__ *tee__itertools (REFPTR argv [], int argc)
+{
+	if (argc == 2 && IntObj.fcheckedcast (argv [1].o)->i != 2)
+		RaiseNotImplemented ("tee n!=2");
+	tee *T = new tee (argv [0].o);
+	return new Tuplen (new teeiter (T, 0), new teeiter (T, 1));
+}
+
+/* module */
+
+static const bltinfunc funcs [] = {
+	{ "izip",	SETARGC (1, INFARGC), izip__itertools, 0 },
+	{ "dropwhile",	SETARGC (2, 2), dropwhile__itertools, 0 },
+	{ "repeat",	SETARGC (1, 2), repeat__itertools, 0 },
+	{ "islice",	SETARGC (2, 4), islice__itertools, 0 },
+	{ "imap",	SETARGC (2, INFARGC), imap__itertools, 0 },
+	{ "tee",	SETARGC (1, 2), tee__itertools, 0 },
+	BSENTINEL
+};
+
+__object__ *import__itertools ()
+{
+	ModuleObj *tm = new ModuleObj BltinModule ("_itertools", funcs);
+	izip_callable = tm->getattr (new_interned ("izip"));
+	return tm;
+}

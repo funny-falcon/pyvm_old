@@ -1,0 +1,355 @@
+#include "dynlib.h"
+#include "config.h"
+
+modsection __object__ *translate_string (REFPTR argv[], int argc)
+{
+	StringObj *S = argv [0].as_string;
+	StringObj *T = argv [1].check_string ();
+
+	if_unlikely (argc == 3)
+		RaiseNotImplemented ("translate with delchars");
+	if_unlikely (T->len != 256)
+		RaiseValueError ("translate table must be 256");
+
+	unsigned int L = S->len;
+	char * __restrict s = (char*) seg_alloc (L + 1);
+	const char * __restrict TL = T->str;
+	const unsigned char * __restrict SL = (unsigned char*) S->str;
+
+	for (unsigned int i = 0; i < L; i++)
+		s [i] = TL [SL [i]];
+	s [L] = 0;
+
+	return new StringObj allocated (s, L);
+}
+
+modsection __object__ *maketrans_string (REFPTR argv[])
+{
+	StringObj *S1 = argv [0].check_string ();
+	StringObj *S2 = argv [1].check_string ();
+
+	if (S1->len != S2->len)
+		RaiseValueError ("maketrans");
+
+	unsigned char *transtbl = (unsigned char*) __malloc (257);
+	for (int i = 0; i < 256; i++)
+		transtbl [i] = i;
+	transtbl [256] = 0;
+	unsigned char *c1 = (unsigned char*) S1->str, *c2 = (unsigned char*) S2->str;
+	for (int i = 0; i < S1->len; i++)
+		transtbl [c1 [i]] = c2 [i];
+	return new StringObj ((char*) transtbl, 256);
+}
+
+#ifdef HAVE_MEMRCHR
+extern void *memrchr (const void*, int, int);
+#else
+const char *memrchr (const char *p, int c, int n)
+{
+	for (p += n - 1; n--; p--)
+		if (*p == c)
+			return p;
+	return 0;
+}
+#endif
+
+modsection __object__ *rfind_string (REFPTR argv[], int argc)
+{
+	StringObj *H = argv [0].as_string;
+	StringObj *S = argv [1].check_string ();
+	if_unlikely (S->len != 1)
+		RaiseNotImplemented ("rfind (...)");	
+	int start = 0, end = H->len;
+	if (argc > 2) {
+		start = H->absl_index (argv [2].check_int ()->i);
+		if (argc == 4)
+			end = H->absl_index (argv [3].check_int ()->i) + 1;
+		if (start > end) end = 0;
+		else end -= start;
+	}
+
+	const char *p = memrchr (H->str + start, S->str [0], end);
+	return newIntObj (p ? p - H->str : -1);
+}
+
+modsection __object__ *rindex_string (REFPTR argv[], int argc)
+{
+	REFPTR x;
+	x = rfind_string (argv, argc);
+	if_unlikely (x.as_int->i == -1)
+		RaiseNotImplemented ("ValueError in rindex");
+	return x.Dpreserve ();
+}
+
+modsection __object__ *endswith_string (REFPTR argv[], int argc)
+{
+	StringObj *H = argv [0].as_string;
+	StringObj *S = argv [1].check_string ();
+	if (argc == 2) {
+		if (S->len == 1)
+			return H->str [H->len - 1] == S->str [0] ? &TrueObj : &FalseObj;
+		return H->len >= S->len && memcmp (S->str, H->str + (H->len - S->len), S->len) == 0
+			? &TrueObj : &FalseObj;
+	}
+	RaiseNotImplemented ("endswith (....)");
+}
+
+modsection __object__ *lower_string (REFPTR argv[])
+{
+	StringObj *S = argv [0].as_string;
+	char *str = S->str;
+	int len = S->len, i;
+
+	char *newstr = (char*) seg_alloc (len + 1);
+	for (i = 0; i < len; i++)
+		newstr [i] = tolower (str [i]);
+	newstr [i] = 0;
+	return new StringObj allocated (newstr, len);
+}
+
+modsection __object__ *upper_string (REFPTR argv[])
+{
+	StringObj *S = argv [0].as_string;
+	char *str = S->str;
+	int len = S->len, i;
+
+	char *newstr = (char*) seg_alloc (len + 1);
+	for (i = 0; i < len; i++)
+		newstr [i] = toupper (str [i]);
+	newstr [i] = 0;
+	return new StringObj allocated (newstr, len);
+}
+
+static int memfind (const char *str, const char *pat, int patl)
+{
+	int nfound = 0;
+	if (patl == 1) {
+		int c = *pat;
+		for (; (str = strchr (str, c)); ++str)
+			++nfound;
+	} else if (patl > 1)
+		for (; (str = strstr (str, pat)); str += patl)
+			++nfound;
+	return nfound;
+}
+
+__object__ *strip_string (REFPTR argv[], int argc)
+{
+#define	ISWS(X) (X == ' ' || (X <= '\r' && X >= '\t'))
+	StringObj *s = argv [0].as_string;
+	char *str = s->str;
+	int i, l;
+
+	if (argc == 1) {
+		for (i = 0, l = s->len; i < l && ISWS (str [i]); i++);
+		for (l = s->len - 1; l >= i && ISWS (str [l]); l--);
+	} else {
+		StringObj *chars = StringObj.fcheckedcast (argv [1].o);
+		const char *a = chars->str;
+		if (chars->len == 1) {
+			for (i = 0, l = s->len; i < l && *a == str [i]; i++);
+			for (l = s->len - 1; l >= i && *a == str [l]; l--);
+		} else {
+			for (i = 0, l = s->len; i < l && strchr (a, str [i]); i++);
+			for (l = s->len - 1; l >= i && strchr (a, str [l]); l--);
+		}
+	}
+
+	return new StringObj binctor (str + i, l + 1 - i);
+}
+
+__object__ *replace_string (REFPTR argv[], int argc)
+{
+	StringObj *orig = argv [0].as_string;
+	StringObj *s1 = argv [1].check_string ();
+	StringObj *s2 = argv [2].check_string ();
+	int L = orig->len, L1 = s1->len, L2 = s2->len, n, i, j;
+
+	if_unlikely (argc == 4)
+		RaiseNotImplemented ("replace (count)");
+
+	char * __restrict str = orig->str, * __restrict nstr, *p, *s;
+
+	/* We have the following interesting cases for L1, L2
+		(1,1), (n,m)
+		(n,0) : TODO
+	*/
+
+	if (L1 == 1 && L2 == 1) {
+		char c1 = s1->str [0], c2 = s2->str [0];
+		if (!strchr (str, c1))
+			return orig;
+		nstr = (char*) seg_alloc (L + 1);
+		for (i = 0; i < L; i++)
+			nstr [i] = str [i] == c1 ? c2 : str [i];
+		nstr [i] = 0;
+		return new StringObj allocated (nstr, L);
+	}
+
+	if (L1) {
+		if (!(n = memfind (str, s1->str, L1)))
+			return orig;
+		p = nstr = (char*) seg_alloc ((j = L + n * (L2 - L1)) + 1);
+		while (n--) {
+			s = strstr (str, s1->str);
+			i = s - str;
+			memcpy (p, str, i);
+			p += i;
+			memcpy (p, s2->str, L2);
+			p += L2;
+			str = s + L1;
+		}
+		strcpy (p, str);
+		return new StringObj allocated (nstr, j);
+	}
+
+	RaiseNotImplemented ("replace where the pattern is ''");
+}
+
+__object__ *StringObj.binary_multiply (__object__ *n)
+{
+	int N = IntObj.fcheckedcast (n)->i;
+	int len = len, nlen = len * N + 1;
+
+	char * __restrict b = seg_alloc (nlen);
+	char * __restrict str = str;
+
+	for (int i = 0; i < N; i++)
+		memcpy (b + i*len, str, len);
+	b [nlen - 1] = 0;
+
+	return new StringObj allocated (b, nlen - 1);
+}
+
+__object__ *isspace_string (REFPTR argv[])
+{
+	StringObj *s = argv [0].check_string ();
+	char *c = s->str;
+	int i, l = s->len;
+
+	for (i = 0; i < l; i++)
+		if (!isspace (c [i]))
+			return &FalseObj;
+
+	return &TrueObj;
+}
+
+__object__ *isdigit_string (REFPTR argv[])
+{
+	StringObj *s = argv [0].check_string ();
+	char *c = s->str;
+	int i, l = s->len;
+
+	for (i = 0; i < l; i++)
+		if (!isdigit (c [i]))
+			return &FalseObj;
+
+	return &TrueObj;
+}
+
+__object__ *isvarname_string (REFPTR argv[])
+{
+	StringObj *s = argv [0].check_string ();
+	char *c = s->str;
+	int i, l = s->len;
+
+	if (!isalpha (c [0]) && c [0] != '_')
+		return &FalseObj;
+
+	for (i = 1; i < l; i++)
+		if (!isalnum (c [i]) && c [i] != '_')
+			return &FalseObj;
+
+	return &TrueObj;
+}
+
+__object__ *count_string (REFPTR argv[], int argc)
+{
+	StringObj *B = argv [0].as_string, *N = argv [1].check_string();
+	int start = 0, end = B->len;
+
+	if (argc > 2) {
+		start = B->absl_index (argv [2].check_int ()->i);
+		if (argc == 4)
+			end = B->absl_index (argv [3].check_int ()->i);
+	}
+
+	if (N->len == 1) {
+		int i, count;
+		char *p = B->str, c = N->str [0];
+		for (i = start, count = 0; i < end; i++)
+			if (p [i] == c)
+				++count;
+		return newIntObj (count);
+	}
+
+	RaiseNotImplemented ("string.count ('no single character')");
+}
+
+__object__ *expandtabs_string (REFPTR argv[], int argc)
+{
+	StringObj *S = argv [0].check_string ();
+	int tabsize = argc == 2 ? argv [1].check_int ()->i : 8;
+	if (!memchr (S->str, '\t', S->len))
+		return S;
+	int c, i, j, k;
+	for (c = i = j = 0; i < S->len; i++)
+		switch (S->str [i]) {
+		case '\t':
+			c += tabsize - c % tabsize;
+		ncase '\n':
+			j += c + 1; c = 0;
+		ndefault:
+			++c;
+		}
+	j += c;
+	char *s = seg_alloc (j + 1);
+	for (c = i = j = 0; i < S->len; i++)
+		switch (k = S->str [i]) {
+		case '\t':
+			for (k = tabsize - (c-j) % tabsize; k; k--)
+				s [c++] = ' ';
+		ndefault:
+			s [c++] = k;
+			if_unlikely (k == '\n')
+				j = c;
+		}
+
+	s [c] = 0;
+	return new StringObj allocated (s, c);
+}
+
+/* module */
+
+extern __object__ *split_string (REFPTR*, int);
+extern __object__ *replace_string (REFPTR*, int);
+extern __object__ *maketrans_string (REFPTR*);
+
+static bltinfunc funcs [] = {
+	{ "split",	SETARGC (1, 3), split_string, 0 },
+	{ "replace",	SETARGC (2, 3), replace_string, 0 },
+	{ "maketrans",	SETARGC (2, 2), maketrans_string, 0 },
+	{ "expandtabs",	SETARGC (1, 2), expandtabs_string, 0 },
+	{ "translate",	SETARGC (2, 3), translate_string, 0 },
+	BSENTINEL
+};
+
+#define LOWERCASE "abcdefghijklmnopqrstuvwxyz"
+#define UPPERCASE "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+#define DIGITS "0123456789"
+#define WHITESPACE " \t\n\r\x0b\x0c"
+
+slowcold __object__ *import_string ()
+{
+	ModuleObj *ns = new ModuleObj BltinModule ("string", funcs);
+	ns->AddAttributes (
+		('lowercase', new StringObj (LOWERCASE)),
+		('uppercase', new StringObj (UPPERCASE)),
+		('digits', new StringObj (DIGITS)),
+		('whitespace', new StringObj (WHITESPACE)),
+		('ascii_letters', new StringObj (LOWERCASE UPPERCASE)),
+		('printable', new StringObj (DIGITS LOWERCASE UPPERCASE
+			"!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~" WHITESPACE))
+	);
+	return ns;
+}

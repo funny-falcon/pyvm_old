@@ -1,0 +1,255 @@
+/*
+ *
+ *	Normally, we go with simple quicksort which is still the fastest
+ *	for shuffled lists with elements with fast comparison, and it
+ *	uses no extra memory.
+ *
+ *	There is also an alternative mergesort which is better in two cases:
+ *	1) If the elements are already mostly sorted
+ *	2) If the comparison costs, and specifically in our case, if
+ *	   the comparison will require execution of bytecode
+ *
+ *	Therefore important is the dsort function which does some sampling
+ *	of the list to detect interesting properties.  If even one of the
+ *	sampled elements has VM_CMP, or all are sorted it picks mergesort
+ *	which does fewer comparisons.
+ *
+ */
+#include "dynlib.h"
+
+///// sort /////
+
+static inline bool ordered (REFPTR p1, REFPTR p2)
+{
+	return p1->cmp_GEN (p2.o) <= 0;
+}
+
+static inline void swap (REFPTR a[], int p1, int p2)
+{
+	a [p1].__swap (a [p2]);
+}
+
+static void qsort (REFPTR v[], int left, int right)
+{
+	int i = 1 + right - left, last;
+
+	if (i <= 4) {
+		zsort (v + left, i);
+		return;
+	}
+
+	swap (v, left, (left + right) / 2);
+	REFPTR &mid = v [left];
+	last = left;
+	for (i = left+1; i <= right; i++, last++)
+		if (ordered (mid, v [i]))
+			break;
+	for (; i <= right; i++)
+		if (!ordered (mid, v [i]))
+			swap (v, i, ++last);
+	swap (v, last, left);
+	qsort (v, left, last - 1);
+	qsort (v, last + 1, right);
+}
+
+static void zsort (REFPTR v[], unsigned int n)
+{
+	switch (n) {
+	case 4:
+		zsort (v, 3);
+		if (!ordered (v [0], v [3])) {
+			__object__ *o = v [3].o;
+			v [3].o = v [2].o;
+			v [2].o = v [1].o;
+			v [1].o = v [0].o;
+			v [0].o = o;
+		} else
+		if (!ordered (v [2], v [3])) {
+			swap (v, 2, 3);
+			if (!ordered (v [1], v [2])) {
+				swap (v, 1, 2);
+		//		if (!ordered (v [0],  v [1])) swap (v, 0, 1);
+			}
+		}
+	ncase 3:
+		if (ordered (v [0], v [1]))
+			if (!ordered (v [1], v [2])) {
+				swap (v, 1, 2);
+				if (!ordered (v [0], v [1])) swap (v, 0, 1);
+			} else;
+		else
+			if (!ordered (v [1], v [2])) swap (v, 0, 2);
+			else {
+				swap (v, 0, 1);
+				if (!ordered (v [1], v [2]))
+					swap (v, 1, 2);
+			}
+	ncase 2:
+		if (!ordered (v [0], v [1])) swap (v, 0, 1);
+	}
+}
+
+typedef bool (*cmpfunc) (REFPTR, REFPTR, void*);
+
+static class MergeSorter
+{
+	REFPTR cmp;
+	cmpfunc CMP;
+	void zmsort (REFPTR[], unsigned int);
+	void mergesort256 (REFPTR[], int);
+	void mergesort (REFPTR[], int);
+	MergeSorter (REFPTR[], int, __object__* =0);
+};
+
+void MergeSorter.zmsort (REFPTR v[], unsigned int n)
+{
+	cmpfunc ordered = CMP;
+	switch (n) {
+	case 4:
+		zmsort (v, 3);
+		if (!ordered (v [0], v [3], this)) {
+			__object__ *o = v [3].o;
+			v [3].o = v [2].o;
+			v [2].o = v [1].o;
+			v [1].o = v [0].o;
+			v [0].o = o;
+		} else
+		if (!ordered (v [2], v [3], this)) {
+			swap (v, 2, 3);
+			if (!ordered (v [1], v [2], this)) {
+				swap (v, 1, 2);
+		//		if (!ordered (v [0],  v [1], this)) swap (v, 0, 1);
+			}
+		}
+	ncase 3:
+		if (ordered (v [0], v [1], this))
+			if (!ordered (v [1], v [2], this)) {
+				swap (v, 1, 2);
+				if (!ordered (v [0], v [1], this)) swap (v, 0, 1);
+			} else;
+		else
+			if (!ordered (v [1], v [2], this)) swap (v, 0, 2);
+			else {
+				swap (v, 0, 1);
+				if (!ordered (v [1], v [2], this))
+					swap (v, 1, 2);
+			}
+	ncase 2:
+		if (!ordered (v [0], v [1], this)) swap (v, 0, 1);
+	}
+}
+
+void MergeSorter.mergesort256 (REFPTR v[], int n)
+{
+	if (n < 5) {
+		zmsort (v, n);
+		return;
+	}
+
+	int n1 = n / 2, n2 = n - n1;
+	REFPTR *t1 = alloca (n1 * sizeof *t1);
+	REFPTR *t2 = v + n1;
+	memcpy (t1, v, n1 * sizeof *t1);
+	mergesort256 (t1, n1);
+	mergesort256 (t2, n2);
+	int i1 = 0, i2 = 0, i = 0;
+	cmpfunc ordered = CMP;
+	for (;;)
+		if (ordered (t1 [i1], t2 [i2], this)) {
+			v [i++].o = t1 [i1++].o;
+			if_unlikely (i1 == n1)
+				return;
+		} else {
+			v [i++].o = t2 [i2++].o;
+			if_unlikely (i2 == n2)
+				break;
+		}
+	memcpy (v + i, t1 + i1, (n1 - i1) * sizeof *v);
+}
+
+static void MergeSorter.mergesort (REFPTR v[], int n)
+{
+	int n1 = n / 2, n2 = n - n1;
+	REFPTR *t1 = n1 < 1024 ? alloca (n1 * sizeof *t1) : seg_alloc (n1 * sizeof *t1);
+	REFPTR *t2 = v + n1;
+	memcpy (t1, v, n1 * sizeof *t1);
+	if (n1 <= 128) {
+		mergesort256 (t1, n1);
+		mergesort256 (t2, n2);
+	} else {
+		mergesort (t1, n1);
+		mergesort (t2, n2);
+	}
+	int i1 = 0, i2 = 0, i = 0;
+	cmpfunc ordered = CMP;
+	if (ordered (t1 [n1 - 1], t2 [0], this))
+		memcpy (v, t1, n1 * sizeof *v);
+	else if (ordered (t2 [n2 - 1], t1 [0], this)) {
+		memcpy (v, t2, n2 * sizeof *v);
+		memcpy (v + n2, t1, n1 * sizeof *v);
+	} else {
+		for (;;)
+			if (ordered (t1 [i1], t2 [i2], this)) {
+				v [i++].o = t1 [i1++].o;
+				if_unlikely (i1 == n1) break;
+			} else {
+				v [i++].o = t2 [i2++].o;
+				if_unlikely (i2 == n2) break;
+			}
+		if (i2 == n2) memcpy (v + i, t1 + i1, (n1 - i1) * sizeof *v);
+	}
+	if (n1 >= 1024)
+		seg_free (t1);
+}
+
+static bool default_cmp (REFPTR p1, REFPTR p2, void*)
+{
+	return ordered (p1, p2);
+}
+
+static bool call_cmp (REFPTR p1, REFPTR p2, void *v)
+{
+	MergeSorter *M = (MergeSorter*) v;
+	REFPTR args [] = { &None, p1.o, p2.o };
+	M->cmp->call (args [0], args, 2);
+	if (args [0].o == &CtxSw)
+		args [0] = preempt_pyvm (CtxSw.vm);
+	return args [0].as_int->i <= 0;
+}
+
+MergeSorter.MergeSorter (REFPTR v[], int n, __object__ *cmpf)
+{
+	if (!cmpf) {
+		cmp.ctor ();
+		CMP = default_cmp;
+	} else {
+		cmp.ctor (cmpf);
+		CMP = call_cmp;
+		//** if (PyFuncObj.isinstance (cmpf)) CMP = call_cmp_pyfunc
+		//** ... which shall avoid the virtual call and preempt w/o test
+		//** ... but it's 0.01% slower!
+	}
+	mergesort (v, n);
+}
+
+void dsort (REFPTR data[], int len)
+{
+	if (len < 512) {
+		qsort (data, 0, len - 1);
+		return;
+	}
+
+	int i, j, d;
+	d = data [0]->cmp_GEN (data [i = j = len / 13].o);
+	for (i += j; i < len; i += j)
+		if (data [i - j]->cmp_GEN (data [i].o) != d) {
+			qsort (data, 0, len - 1);
+			return;
+		}
+	MergeSorter (data, len);
+}
+
+void ListObj.sort_cmp (__object__ *cmp)
+{
+	MergeSorter (data, len, cmp);
+}

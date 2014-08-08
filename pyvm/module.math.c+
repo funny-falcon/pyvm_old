@@ -1,0 +1,99 @@
+extern "math.h" {
+#include <math.h>
+}
+
+#include "dynlib.h"
+
+/* ----* math wrappers *---- */
+
+static inline double todouble (__object__ *o)
+{
+	return FloatObj.isinstance (o) ? FloatObj.cast (o)->f :
+		(double) IntObj.checkedcast (o)->i;
+}
+
+#define DEFWRAP1(PF, LF) \
+	_module __object__ *PF ## _math (REFPTR argv [])\
+	{\
+		return new FloatObj (LF (todouble (argv [0].o)));\
+	}
+
+#define DEFWRAP2(PF, LF) \
+	_module __object__ *PF ## _math (REFPTR argv [])\
+	{\
+		return new FloatObj (LF (todouble (argv [0].o), todouble (argv [1].o)));\
+	}
+
+#define DEFWRAP1S(X) DEFWRAP1(X, X)
+#define DEFWRAP2S(X) DEFWRAP2(X, X)
+
+DEFWRAP1S (acos)
+DEFWRAP1S (asin)
+DEFWRAP1S (atan)
+DEFWRAP1S (sqrt)
+DEFWRAP1S (tan)
+DEFWRAP1S (tanh)
+DEFWRAP1S (cos)
+DEFWRAP1S (cosh)
+DEFWRAP1S (sin)
+DEFWRAP1S (sinh)
+DEFWRAP1S (exp)
+DEFWRAP1S (log10)
+DEFWRAP1S (ceil)
+DEFWRAP1S (fabs)
+DEFWRAP1S (floor)
+DEFWRAP2S (atan2)
+DEFWRAP2S (fmod)
+DEFWRAP2S (hypot)
+DEFWRAP2S (ldexp)
+DEFWRAP2S (pow)
+
+//frexp
+//modf
+
+_module __object__ *log_math (REFPTR argv [], int argc)
+{
+	if (argc == 1)
+		return new FloatObj (log (todouble (argv [0].o)));
+	return new FloatObj (log (todouble (argv [0].o)) / log (todouble (argv [1].o)));
+}
+
+_module __object__ *radians (REFPTR argv[])
+{
+	return new FloatObj (todouble (argv [0].o) * M_PI / 180.0);
+}
+
+/* module */
+
+static const bltinfunc funcs [] = {
+	{ "acos",	SETARGC (1, 1), acos_math, 0 },
+	{ "asin",	SETARGC (1, 1), asin_math, 0 },
+	{ "atan",	SETARGC (1, 1), atan_math, 0 },
+	{ "sqrt",	SETARGC (1, 1), sqrt_math, 0 },
+	{ "tan",	SETARGC (1, 1), tan_math, 0 },
+	{ "tanh",	SETARGC (1, 1), tanh_math, 0 },
+	{ "cos",	SETARGC (1, 1), cos_math, 0 },
+	{ "cosh",	SETARGC (1, 1), cosh_math, 0 },
+	{ "sin",	SETARGC (1, 1), sin_math, 0 },
+	{ "sinh",	SETARGC (1, 1), sinh_math, 0 },
+	{ "exp",	SETARGC (1, 1), exp_math, 0 },
+	{ "log10",	SETARGC (1, 1), log10_math, 0 },
+	{ "ceil",	SETARGC (1, 1), ceil_math, 0 },
+	{ "fabs",	SETARGC (1, 1), fabs_math, 0 },
+	{ "floor",	SETARGC (1, 1), floor_math, 0 },
+	{ "atan2",	SETARGC (2, 2), atan2_math, 0 },
+	{ "fmod",	SETARGC (2, 2), fmod_math, 0 },
+	{ "hypot",	SETARGC (2, 2), hypot_math, 0 },
+	{ "ldexp",	SETARGC (2, 2), ldexp_math, 0 },
+	{ "pow",	SETARGC (2, 2), pow_math, 0 },
+	{ "log",	SETARGC (1, 2), log_math, 0 },
+	{ "radians",	SETARGC (1, 1), radians, 0 },
+	BSENTINEL
+};
+
+slowcold __object__ *import_math ()
+{
+	ModuleObj *ns = new ModuleObj BltinModule ("math", funcs);
+	ns->AddAttributes (("pi", new FloatObj ($M_PI)), ("e", new FloatObj ($M_E)));
+	return ns;
+}

@@ -1,0 +1,754 @@
+/********************************************************************************
+
+	Except from marshalling this file also contains routines to
+	"optimize the bytecode", "relocate the bytecode to DT" and
+	other similar stuff with bytecode conversions.
+
+*********************************************************************************/
+
+#include "config.h"
+#include "dynlib.h"
+#include "py_opcodes.h"
+
+extern bool internable (const unsigned char*, int);
+
+__object__ *PyCodeObj.get_const (int n)
+{
+	// "Global Consts" a constant with n > 30000 is found in the
+	// tuple which is the last element of co_names. Done because most
+	// code objects do share constants and this reduces the size of
+	// the object files
+	if (n >= 30000) {
+		Tuplen *T = Tuplen.cast (names.as_tuplen->__xgetitem__ (names.as_tuplen->len - 1));
+		return T->__xgetitem__ (n - 30000);
+	}
+
+	return consts.as_tuplen->__xgetitem__ (n);
+}
+
+//#############################################################################
+//			Bytecode reader
+//#############################################################################
+
+static class bytecode
+{
+	__object__ *module;
+	__object__ *SharedNamesTuple;
+	REFPTR strings;
+	byte *bc;
+	int pos;
+	long bmagic;
+	unsigned int size;
+	void r_lineinfo ();
+
+#ifdef	ZLNOTAB
+	/* Instead of keeping 5000 tiny string objects, store all of them
+	 * in one big lnotab and use offsets on each code object.
+	 */
+	bytearray lnotab_collector;
+#endif
+
+   public:
+	int firstlineno;
+	REFPTR lnotab;
+	bytecode (byte*, uint, __object__*);
+	long r_long ();
+	byte r_byte ();
+	__object__ *r_object ();
+};
+
+bytecode.bytecode (byte *b, uint s, __object__ *m)
+{
+#ifdef	ZLNOTAB
+	lnotab_collector.ctor ();
+	lnotab.ctor (new StringObj (""));
+#else
+	lnotab.ctor (&None);
+#endif
+	bc = b;
+	size = s;
+	pos = 0;
+	strings.ctor (new ListObj);
+	module = m;
+	bmagic = MAGIC;
+}
+
+static class bytecode_file : bytecode
+{
+	filedes FD;
+
+   public:
+	bytecode_file (char*, __object__*);
+};
+
+static inline void bytecode.r_lineinfo ()
+{
+	firstlineno = r_long ();
+#ifdef	ZLNOTAB
+	REFPTR tmp = r_object ();
+	lnotab_collector.addstr (tmp.as_string->str, tmp.as_string->len);
+#else
+	lnotab = r_object ();
+#endif
+}
+
+bytecode_file.bytecode_file (char *fnm, __object__ *m)
+{
+#ifndef OPTIMIZEVM
+	fprintf (stderr, "To open [%s]\n", fnm);
+#endif
+	FD.ctor (fnm, O_RDONLY);
+	if (FD.type != FD_READ_MMAP) {
+		fprintf (stderr, "Can't read file:%s\n", fnm);
+		RaiseImportError (&None);
+	}
+	bytecode.ctor ((byte*) FD.mm_start, FD.len, m);
+	long magic = r_long();
+
+	if (!in3 (magic, MAGIC, MAGIC23, MAGIC_PYVM)) {
+		fprintf (stderr, "Not a pyc file. Bad magic\n");
+		RaiseImportError (&None);
+	}
+	bmagic = magic;
+	r_long ();	/* timestamp */
+}
+
+static inline long bytecode.r_long ()
+{
+#ifdef	PYVM_ENDIAN_LITTLE
+	long ret = *((long*) &bc [pos]);
+	pos += sizeof ret;
+#else
+	long ret = r_byte ();
+	ret |= r_byte () << 8;
+	ret |= r_byte () << 16;
+	ret |= r_byte () << 24;
+#endif
+	return ret;
+}
+
+static inline short bytecode.r_short ()
+{
+#ifdef	PYVM_ENDIAN_LITTLE
+	short ret = *((short*) &bc [pos]);
+	pos += sizeof ret;
+#else
+	short ret = r_byte ();
+	ret |= r_byte () << 8;
+#endif
+	return ret;
+}
+
+static long bytecode.r_xlong ()
+{
+	/* We don't have longs but it's possible that python has stored
+	 * 0xffffffff as a long! (while it's just a flag for SDL!)
+	 * We should try to load longs in this case.
+	 * A big positive number 2^31 < x < 2^32 will be converted to a negative
+	 * integer! We assume OK because *usually* such numbers are hex flags and
+	 * it bitwise is applied on them it will work as expected.
+	 */
+	int size = r_long ();
+	unsigned long ret = 0;
+	if (size > 3) {
+	too_big_error:
+		fprintf (stderr, "Don't have infinite-digit numbers in pyvm (size=%i)\n", size);
+		exit (1);
+	}
+	if (size == 3) {
+		int d1 = r_short ();
+		int d2 = r_short ();
+		int d3 = r_short ();
+		if (d3 > 4)
+			goto too_big_error;
+		ret = d1 + (d2 << 15) + (d3 << 30);
+	} else if (size == 2) {
+		int d1 = r_short ();
+		ret = d1 + (r_short () << 15);
+	} else
+		ret = !size ? 0 : r_short ();
+	return ret;
+}
+
+static inline byte bytecode.r_byte ()
+{
+	return bc [pos++];
+}
+
+static __object__ *bytecode.r_string (int len, bool interned)
+{
+	__object__ *s;
+	if (interned || (bmagic == MAGIC23 && internable (bc + pos, len))) {
+		s = intern_string2 ((char*) bc + pos, len);
+		strings.as_list->append (s);
+	} else s = len == 1 ? char_string (bc [pos]) : new StringObj binctor ((char*) bc + pos, len);
+	pos += len;
+	return s;
+}
+
+static __object__ *bytecode.r_double ()
+{
+	int len = r_byte ();
+	char s [len + 1];
+	memcpy (s, bc + pos, len);
+	s [len] = 0;
+	pos += len;
+	return new FloatObj (atof (s));
+}
+
+static __object__ *bytecode.r_tuple (int len)
+{
+	int i;
+	if (!len) return NILTuple;
+	REFPTR *arr = (REFPTR*) seg_alloc (len * sizeof *arr);
+	for (i = 0; i < len; i++)
+		arr [i].ctor (r_object ());
+	Tuplen *ret = new Tuplen mvrefctor (arr, len);
+	return ret;
+}
+
+static __object__ *bytecode.r_builtin ()
+{
+	__object__ *n = r_object ();
+	return __builtins__.as_ns->__dict__.as_dict->xgetitem (n);
+}
+
+static __object__ *bytecode.r_object ()
+{
+	switch (byte type = r_byte ()) {
+	case 'N': return &None;
+	case 'l': return newIntObj (r_xlong ());
+	case 'i': return newIntObj (r_long ());
+	case 'R': return strings.as_list->__xgetitem__ (r_long ());
+	case 'R'+128: return strings.as_list->__xgetitem__ (r_byte ());
+	case '(': return r_tuple (r_long ());
+	case '('+128: return r_tuple (r_byte ());
+	case 'T': return &TrueObj;
+	case 'F': return &FalseObj;
+	case 'f': return r_double ();
+	case 's':
+	case 't':
+	case 'u': return r_string (r_long (), type == 't');
+	case 's'+128:
+	case 't'+128: return r_string (r_byte (), type == 't'+128);
+	case 'c':
+	{
+		/* This is a constructor of pycodeobj! */
+		__object__ *oo;
+		PyCodeObj *C = new PyCodeObj;
+
+		C->argcount = r_long();
+		r_long(); /* nlocals, unused? */
+		C->stacksize = r_long() + 1;
+		C->flags = r_long();
+		C->code.ctor (r_object ());
+		C->consts.ctor (r_object ());
+		C->nloops = optimize_bytecode ((byte*) C->code.as_string->str,
+			 C->code.as_string->len, C->flags&CO_GENERATOR,
+			 &C->pyvm_flags);
+		C->names.ctor (r_object ());
+		/* * * * shared tuple * * */
+		if (bmagic == MAGIC_PYVM)
+			if (C->names.o == &None) C->names = SharedNamesTuple;
+			else SharedNamesTuple = C->names.o; else;
+		/* * * * * * * * * * * * */
+		C->set_varnames (Tuplen.cast (r_object ()));
+		C->nlocals = C->varnames.as_tuplen->len;
+
+		oo = r_object ();
+		C->freevars.ctor (Tuplen.isinstance (oo) ? oo : NILTuple);
+		oo = r_object ();
+		C->cellvars.ctor (Tuplen.isinstance (oo) ? oo : NILTuple);
+		C->filename.ctor (r_object ());
+		C->module.ctor (module);
+		C->name.ctor (r_object ());
+		if (C->cellvars.as_tuplen->len || C->freevars.as_tuplen->len)
+			C->make_closure ();
+		else C->nclosure = 0;
+		if (!C->name.as_string->_strcmp ("?"))
+			C->name = C->filename.o;
+#ifdef	ZLNOTAB
+		C->lno_offset = lnotab_collector.len;
+#endif
+		r_lineinfo ();
+#ifdef	ZLNOTAB
+		C->lno_len = lnotab_collector.len - C->lno_offset;
+#endif
+		C->firstlineno = firstlineno;
+		C->lnotab.ctor (lnotab.o);
+		C->_prep();
+		return C;
+	}
+	case 'B': return r_builtin ();
+	default:
+		fprintf (stderr, "Marshal: unknown type:%i %c\n", type, type);
+		exit (0);
+	}
+}
+
+static __object__ *bytecode.r_module ()
+{
+	/* assuming that 'return' is not allowed outside functions..
+	 * If 'return' is allowed in the module code, we'd have to
+	 * scan for all RETURN_VALUES and replace them.
+	 */
+	__object__ *o = r_object ();
+	StringObj *S = PyCodeObj.cast (o)->code.as_string;
+	if (S->str [S->len - 1] == RETURN_VALUE && S->len)
+		S->str [S->len - 1] = RETURN_MODULE;
+#ifdef	ZLNOTAB
+	lnotab.as_string->dtor ();
+	int llen = lnotab.as_string->len = lnotab_collector.len;
+	memcpy (lnotab.as_string->str = seg_alloc (llen + 1), lnotab_collector.str, llen);
+#endif
+	return o;
+}
+
+__object__ *load_compiled (char *fnm, __object__ *module)
+{
+	REFPTR M = module;
+	bytecode_file PYC (fnm, module);
+	return PYC.r_module ();
+}
+
+__object__ *r_marshal (byte *c, int len, int *ptr)
+{
+	bytecode B (c, len, &None);	// XXX: should have a special ModuleObj
+	__object__ *r = B.r_object ();
+	if (ptr)
+		*ptr += B.pos;
+	return r;
+}
+
+//#######################################################################################
+//				Optimizer
+//
+// Optimizer and -neccessary- pyvm transformer.  In reallity, pyvm runs a different
+// kind of bytecode.  Here we transform the python bytecode to pyvm bytecode.  Most
+// of the transformations are for optimized patterns (for example STORELOAD_FAST).
+// But there are some more for the different implementation of the exception handling.
+//
+// We also take the chance to count the maximum loop depth, which is a parameter needed
+// by pyvm.
+//#######################################################################################
+
+extern void *XXLATE (byte);
+
+static inline short readshort (byte *x, int a)
+{
+	return x [a] + (x [a + 1] << 8);
+}
+
+static inline void writeshort (byte *x, int a, short val)
+{
+	x [a] = val & 255;
+	x [a + 1] = val >> 8;
+}
+
+static int optimize_bytecode (byte *bcd, int len, bool generator, short int *pfl)
+{
+	int i, j, k, l, m;
+	int maxloop = 0;
+	short arg = 0;
+	byte cmd;
+	bool jumped [len];
+	char loopc [len];
+	memset (jumped, 0, len * sizeof jumped [0]);
+	memset (loopc, 0, len);
+
+	*pfl = 0;
+
+	/* see where jumps lead to and count max loop depth */
+
+	for (i = 0; i < len;) {
+		cmd = bcd [i++];
+		if (cmd >= STORE_NAME) {
+			if (__inset__ (cmd, STORE_NAME, LOAD_NAME, DELETE_NAME))
+				*pfl |= PYVMFLAGS_LOCALS;
+			arg = readshort (bcd, postfix (i, i += 2));
+		}
+		if (has_jabs (cmd)) jumped [arg] = 1;
+		else if (has_jrel (cmd)) {
+			jumped [i + arg] = 1;
+			if (__inset__ (cmd, SETUP_LOOP, SETUP_EXCEPT, SETUP_FINALLY))
+				for (j = 0; j < arg; j++)
+					++loopc [j + i];
+		}
+	}
+
+	for (i = 0; i < len; i++)
+		if (loopc [i] > maxloop) maxloop = loopc [i];
+
+	/*
+	 * - convert jumps that lead out of except-clauses to JUMP_{FORWARD|ABSOLUTE}_EXC
+	 * - convert return between try..finally to RETURN_VALUE_FNL
+	 */
+	for (i = 0; i < len;) {
+		cmd = bcd [i++];
+		if (cmd >= STORE_NAME)
+			arg = readshort (bcd, postfix (i, i += 2));
+		if (generator && cmd == RETURN_VALUE)
+			bcd [i - 1] = RETURN_GENERATOR;
+		else if (cmd == SETUP_FINALLY) {
+			j = arg + i;// - 3;
+			for (k = i; k < j;)
+				if ((cmd = bcd [k++]) >= STORE_NAME) k += 2;
+				else if (cmd == RETURN_VALUE) bcd [k - 1] = RETURN_VALUE_FNL;
+			for (k = j /*+ 3*/, m = 0;;) {
+				cmd = bcd [k++];
+				if (cmd >= STORE_NAME) k += 2;
+				if (in2 (cmd, END_FINALLY, END_FINALLY2))
+					if (!m--) break;
+				if (in2 (cmd, SETUP_EXCEPT, SETUP_FINALLY)) ++m;
+			}
+			if (cmd == END_FINALLY)
+				bcd [k - 1] = END_FINALLY2;
+		} else if (cmd == SETUP_EXCEPT) {
+			/*** it goes like this:
+			 ***	SETUP_EXCEPT label1
+			 ***	...
+			 *** label1:
+			 ***	...
+			 ***	END_FINALLY
+			 *** else-label:
+			 ***	...
+			 *** We rename all jumps between label1 and else-label
+			 *** that point outside the block.
+			 ***/
+			j = arg + i - 3;
+			for (k = j + 3, m = 0;;) {
+				cmd = bcd [k++];
+				if (cmd >= STORE_NAME) k += 2;
+				if (in2 (cmd, END_FINALLY, END_FINALLY2))
+					if (!m--) break;
+				if (in2 (cmd, SETUP_EXCEPT, SETUP_FINALLY)) ++m;
+			}
+			for (l = j + 3; l < k;) {
+				cmd = bcd [l++];
+				if (cmd >= STORE_NAME)
+					arg = readshort (bcd, postfix (l, l += 2));
+				if (has_jrel (cmd)) {
+					m = arg + l;
+					if (m <= j || m >= k)
+						switch (cmd) {
+						case JUMP_FORWARD: bcd [l - 3] = JUMP_FORWARD_EXC;
+						ncase JUMP_FORWARD_EXC:
+						ncase SETUP_LOOP:
+			ndefault: fprintf (stderr, "[1]Bytecode warning on %i!\n", cmd);
+						}
+				} else if (has_jabs (cmd)) {
+					m = arg;
+					if (m <= j || m >= k)
+						switch (cmd) {
+						case JUMP_ABSOLUTE: bcd [l - 3] = JUMP_ABSOLUTE_EXC;
+						ncase JUMP_ABSOLUTE_EXC:
+			ndefault: fprintf (stderr, "[2]Bytecode warning on %i!\n", cmd);
+						}
+				}
+			}
+		}
+	}
+
+	/* optimizations */
+
+static	const int transcmp [8] = {
+		 [0] = 5, [5] = 0, [2] = 3, [3] = 2, [1] = 4, [4] = 1, [6] = 7, [7] = 6
+	};
+
+	for (i = 0; i < len;) {
+		cmd = bcd [i++];
+		if (cmd >= STORE_NAME)
+			arg = readshort (bcd, postfix (i, i += 2));
+		switch (cmd) {
+		ncase COMPARE_OP:
+		do_jfp:
+			if (bcd [i] == JUMP_IF_FALSE) {
+				if (bcd [i + 3] == POP_TOP && !jumped [i]
+				 && bcd [readshort (bcd, i + 1) + i + 3] == POP_TOP) {
+				/* it is very common to have this in "if"s
+				 * we want to avoid pushing the comparison result to
+				 * the stack. So we alter the jumpcode past POP_TOP
+				 */
+					switch (arg) {
+						case 2: bcd [i - 3] = JFP_COMPARE_EQ;
+							writeshort (bcd, i - 2, 0);
+						ncase 3: bcd [i - 3] = JFP_COMPARE_NEQ;
+							writeshort (bcd, i - 2, 1);
+						ncase 0: bcd [i - 3] = JFP_COMPARE_LE;
+							writeshort (bcd, i - 2, 0);
+						ncase 5: bcd [i - 3] = JFP_COMPARE_GRQ;
+							writeshort (bcd, i - 2, 1);
+						ncase 4: bcd [i - 3] = JFP_COMPARE_GR;
+							writeshort (bcd, i - 2, 0);
+						ncase 1: bcd [i - 3] = JFP_COMPARE_LEQ;
+							writeshort (bcd, i - 2, 1);
+						ncase 6: bcd [i - 3] = JFP_COMPARE_IN;
+							writeshort (bcd, i - 2, 0);
+						ncase 7: bcd [i - 3] = JFP_COMPARE_NIN;
+							writeshort (bcd, i - 2, 1);
+						ncase 8: bcd [i - 3] = JFP_COMPARE_IS;
+							writeshort (bcd, i - 2, 0);
+						ncase 9: bcd [i - 3] = JFP_COMPARE_IS;
+							writeshort (bcd, i - 2, 1);
+						ndefault: goto dondoit;
+					}
+					writeshort (bcd, i + 1, readshort (bcd, i + 1) + 1);
+				}
+				dondoit:;
+			} else if (bcd [i] == JUMP_IF_TRUE) {
+				if (bcd [i + 3] == POP_TOP && !jumped [i]
+				 && bcd [readshort (bcd, i + 1) + i + 3] == POP_TOP
+				 && __inset__ (arg, 2, 3, 0, 5, 4, 1, 6, 7)) {
+					bcd [i] = JUMP_IF_FALSE;
+					writeshort (bcd, i - 2, arg = transcmp [arg]);
+					goto do_jfp;
+				}
+			}
+		ncase ROT_TWO:
+			if (bcd [i] == ROT_THREE && bcd [i+1] == ROT_TWO)
+				bcd [i - 1] = RROT_THREE;
+		ncase ROT_THREE:
+			if (bcd [i] == ROT_TWO)
+				bcd [i - 1] = ROT_SWAP1;
+		ncase DUP_TOP:
+			if (bcd [i] == STORE_FAST)
+				bcd [i - 1] = DUPSTORE_FAST;
+		ncase STORE_FAST:
+			if (bcd [i] == LOAD_FAST && arg == readshort (bcd, i + 1))
+				/* This is actually very good after FOR_ITER
+				 * The 'pyc compiler' converts to DUP-STORE
+				 */
+				bcd [i - 3] = STORELOAD_FAST;
+		ncase LIST_APPEND:
+			if (bcd [i] == JUMP_ABSOLUTE)
+				bcd [i - 1] = LIST_APPEND_JUMP;
+		ncase LOAD_FAST:
+			if (bcd [i] == LOAD_ATTR)
+				bcd [i - 3] = LOAD_FAST_ATTR;
+		}
+	}
+	return maxloop+2;
+}
+
+//#######################################################################################
+//				Direct Threading
+//
+// Make the direct threading bytecode.  The new bytecode table has opcode entries
+// which are sizeof(void*) and point to the address of the boot_pyvm handler for
+// the opcode.  The argument is sizeof(int) and may be an integer (int), an address
+// (void*) or an object (__object__*).
+//#######################################################################################
+
+#ifdef DIRECT_THREADING
+slow void **relocate_bytecode (register const byte *bcd, int len, byte *lnt, int lntl)
+{
+	/* we go from bytecode to wordcode. Theoretically this is
+	 * better as the cpus prefer to work with words.
+	 * on the other hand the size of the bytecode table goes *4
+	 * so may the locality of code be with us!
+	 */
+
+	int i, c, l, lc = 0, li = 0;
+	byte cmd;
+	unsigned int arg;
+	int addr_to_instr [len];
+
+	if (lntl) lc = lnt [0];
+	for (l = c = i = 0; i < len;) {
+		if (l < lntl && i >= lc) {
+			/* relocate lnotab */
+			lc += lnt [l+2];
+			lnt [l] = c - li;
+			li = c;
+			l += 2;
+		}
+		addr_to_instr [i] = c++;
+		if (bcd [i++] >= STORE_NAME)
+			i += 2, c++;
+	}
+	void **mcode = (void**) __malloc (c * sizeof *mcode);
+
+	for (c = i = 0; i < len;) {
+		mcode [c++] = XXLATE (cmd = bcd [i++]);
+		if (cmd >= STORE_NAME) {
+			arg = (int)(*(short*) &bcd [postfix (i, i += 2)]);
+			if (cmd == CALL_FUNCTION_KW) arg |= 1 << 30;
+			else if (cmd == CALL_FUNCTION_VAR_KW) arg |= 2 << 30;
+			mcode [c++] = has_jrel (cmd) ? (void*) &mcode [addr_to_instr [i + arg]]
+			: has_jabs (cmd) ? (void*) &mcode [addr_to_instr [arg]] : (void*) arg;
+			if (cmd == JUMP_FORWARD) mcode [c - 2] = XXLATE (JUMP_ABSOLUTE);
+			if (cmd == JUMP_FORWARD_EXC) mcode [c - 2] = XXLATE (JUMP_ABSOLUTE_EXC);
+		}
+	}
+
+	return mcode;
+}
+#endif
+
+//#######################################################################################
+//				Half Closures
+//
+// pyvm uses closures which are bound once by value at the creation of the function.
+// 
+// In this scenario we don't need the LOAD_DEREF, STORE_DEREF, LOAD_CLOSURE functionality
+// and since the closures are in the "array of locals" (after the real locals that are
+// reset when the function returns), we can reference them with LOAD_FAST.
+//
+// What we have to do here is convert the indexes. i-th closure -> n-th fastlocal
+//
+// The only problem with half closures are self-recursive references,
+//		def foo ():
+//			def bar():
+//				bar()
+// For that we mark the special flag 'self_closure' and pyvm is supposed to
+// load a value to that after the function object has been created.
+//
+// TODO: because of half closures the closures cannot be modified. We can
+// turn closures to LOAD_CONSTs in the case of DIRECT THREADING. However
+// that requires duplication of the bytecode for each function object
+// that's generated from a code object. So it's quite some work and may
+// not worth it because there are cases where we "generate a closure, use
+// it once and the destroy it" many times.
+//
+//#######################################################################################
+
+void PyCodeObj.make_closure ()
+{
+	Tuplen *vnames = varnames.as_tuplen;
+	int nc = cellvars.as_tuplen->len, nf = freevars.as_tuplen->len;
+	int ntot = vnames->len;
+
+	byte cmd, *bcd = (byte*) code.as_string->str;
+	unsigned int i, len = code.as_string->len, arg;
+
+	int xcell [nc+nf];
+
+	self_closure = freevars.as_tuplen->__find (name.o);
+
+	for (i = 0; i < nc; i++) {
+		arg = vnames->__find (cellvars.as_tuplen->data [i].o);
+		xcell [i] = arg == -1 ? ntot++ : arg;
+	}
+	for (i = 0; i < nf; i++)
+		xcell [i + nc] = ntot + i;
+
+	for (i = 0; i < len;) {
+		if ((cmd = bcd [i++]) >= STORE_NAME) {
+			arg = (int)(*(short*) &bcd [postfix (i, i += 2)]);
+			switch (cmd) {
+			case LOAD_DEREF:
+			case LOAD_CLOSURE:
+				bcd [i - 3] = LOAD_FAST;
+				writeshort (bcd, i - 2, xcell [arg]);
+			ncase STORE_DEREF:
+				bcd [i - 3] = STORE_FAST;
+				writeshort (bcd, i - 2, xcell [arg]);
+			}
+		}
+	}
+
+	/* locals + closures (frees) */
+	nlocals = ntot + (nclosure = nf);
+}
+
+//#######################################################################################
+//				Direct Reference of constants
+//
+// In the case of direct threading, we can embed constants into the argument of
+// LOAD_CONST instead of the index of it in the co_consts.  Same for opcodes that
+// load something from co_names (LOAD_GLOBAL, LOAD_ATTR, etc).
+// *XXX*: if the constant is a __permanent__ we can use a new opcode LOAD_CONST_SINGLETON
+// which won't incref it while moving to the stack.
+//#######################################################################################
+
+#ifdef DIRECT_THREADING
+static inline bool is_permanent (__object__ *o)
+{
+	return 0;
+	return o->vf_flags & VF_PERMANENT;// || (IntObj.isinstance (o) && IntObj.cast (o)->permanent ());
+}
+
+void PyCodeObj.inline_consts ()
+{
+	byte cmd, *bcd = (byte*) code.as_string->str;
+	unsigned int i, len = code.as_string->len;
+	INSTR c = lcode;
+
+	if_unlikely (names.o == &None)
+		RaiseNotImplemented ("shared names tuple: feature is broken");
+
+	for (i = 0; i < len;) {
+		c++;
+		if ((cmd = bcd [i++]) >= STORE_NAME) {
+			switch (cmd) {
+			case LOAD_CONST:
+				c [0] = get_const (*((short*) &bcd [i]));
+				if (is_permanent ((__object__*) c [0]))
+					c [-1] = XXLATE (LOAD_CONST_PERMANENT);
+			ncase LOAD_ATTR:	case STORE_ATTR:	case DELETE_ATTR:
+			case LOAD_GLOBAL:	case STORE_GLOBAL:
+			case STORE_NAME:	case LOAD_NAME:		case DELETE_NAME:
+			case IMPORT_NAME:	case IMPORT_FROM:
+				c [0] = names->__xgetitem__ (*((short*) &bcd [i]));
+			}
+			i += sizeof (short int);
+			c++;
+		}
+	}
+}
+#endif
+
+//#############################################################################
+//				This is complex
+//
+// When we load bytecode from a compiled pyc we are almost OK and every pass
+// is done in order. On the other hand we we generate a code object from the
+// compiler we don't do the optimizations/transformations because if we save
+// the transformed bytecode it won't be compatible with python. So if we see
+// that we have to execute a code object that's not properly prepared, do it
+// now. This is complex because we have 4 places that construct PyCodeObjects
+// and some of them do only half of the job.
+//
+// The Right Thing would be to have another type 'Marshallable Code Object'
+// which will be the clean form of code objects and from which we can generate
+// the 'Executable Code Object" on demand from MAKE_FUNCTION/MAKE_CLOSURE.
+// Currently, code objects are created:
+//	1: internally for our own bytecodes (pyby)
+//	2: from marshal load
+//	3: from code.new (compiler)
+// we should probably use the clean form only for (3) to save some space.
+//##############################################################################
+
+void PyCodeObj.prepare_bytecode ()
+{
+	nloops = optimize_bytecode ((byte*) code.as_string->str,
+			 code.as_string->len, flags&CO_GENERATOR,
+			 &pyvm_flags);
+
+	if (cellvars.as_tuplen->len || freevars.as_tuplen->len)
+		make_closure ();
+	else
+		nclosure = 0;
+	_prep ();
+
+	/* Also prepare bytecode for any closures because we need nclosure before
+	 * the function definition
+	 */
+	for (int i = 0; i < consts.as_tuplen->len; i++)
+		if (PyCodeObj.isinstance (consts.as_tuple->data [i].o))
+			consts.as_tuplen->data [i].as_code->prepare_bytecode ();
+}
+
+// ################################## miscellanery ##################################
+
+/* -----* machine code *---- */
+slow void **relocate_bytecode (register const byte *bcd, int len, byte* = 0, int=0) noinline;
+void inline_machine_code.make (byte *c, int l, bool gtor)
+{
+	short int tmp;
+	nloops = optimize_bytecode (code = c, codesize = l, gtor, &tmp);
+#ifdef	DIRECT_THREADING
+	lcode = relocate_bytecode (c, l);
+#endif
+}
+

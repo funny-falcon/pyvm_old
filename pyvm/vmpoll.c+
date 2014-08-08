@@ -1,0 +1,75 @@
+#include "dynlib.h"
+#include "vmpoll.h"
+
+extern int Request (int, int, int, int);
+extern void setNotify (void (*)(int, int));
+extern REFPTR devnull;
+extern PyFuncObj *block_thread ();
+
+//
+// notifier
+//
+
+NotifyObj.NotifyObj ()
+{
+	T = RC;
+}
+
+void NotifyObj.set_retval (__object__ *o)
+{
+	T->vm->S.STACKTOP [-1] = o;
+}
+
+void NotifyObj.do_notify (int)
+{
+	T->move_running ();
+}
+
+//
+//
+
+__object__ *vmsleep (int ms)
+{
+	Request ((int) new NotifyObj, -1, ms, 0);
+	block_thread ()->call (devnull, &devnull, 0);
+	return &CtxSw;
+}
+
+__object__ *vmpollin (NotifyObj *o, int fd, int timeout)
+{
+	Request ((int) o, fd, timeout, 0);
+	block_thread ()->call (devnull, &devnull, 0);
+	return &CtxSw;
+}
+
+__object__ *vmpollout (NotifyObj *o, int fd, int timeout)
+{
+	Request ((int) o, fd, timeout, 1);
+	block_thread ()->call (devnull, &devnull, 0);
+	return &CtxSw;
+}
+
+//
+// wake up
+//
+
+void vmNotify (int token, int timedout)
+{
+	vmTicks = -1;
+	end_allow_threads ();
+	NotifyObj *N = (NotifyObj*) token;
+	N->do_notify (timedout);
+	delete N;
+	begin_allow_threads (1);
+}
+
+///////////////////////////////////////////////////
+
+static slowcold class InitVmpoll : InitObj
+{
+	int priority = INIT_LAST;
+	void todo ()
+	{
+		setNotify (vmNotify);
+	}
+};

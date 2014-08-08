@@ -1,0 +1,154 @@
+#include "dynlib.h"
+#include "config.h"
+
+/* exc_info */
+
+modsection static __object__ *exc_info ()
+{
+	return pyvm_exc_info ();
+}
+
+/* getrefcount */
+
+modsection static __object__ *getrefcount (REFPTR argv[])
+{
+	return newIntObj (argv [0].o->refcnt);
+}
+
+/* exit */
+
+modsection static __object__ *exit_sys (REFPTR argv[], int argc)
+{
+	return RaiseSystemExit (argc ? argv [0].o : &None);
+}
+
+/*
+ * _getframe
+ * we don't really have frame objects. This is a fake object
+ * which can emulate _getframe() and work in some simple cases
+ * like:
+ *	sys._getframe (1).f_locals
+ */
+
+extern long current_frame_sig ();
+extern __object__ *f_locals (int);
+extern __object__ *f_globals (int);
+
+static DictObj frameMethods __noinit ();
+static const char frameType [] = "sha";
+static TypeObj frameTypeObj;
+
+static class frameObj : __destructible__
+{
+	const char *const stype = frameType;
+	const TypeObj &type = &frameTypeObj;
+	DictObj *type_methods = &frameMethods;
+
+	long sig;
+	int n;
+    public:
+	frameObj (int);
+	__object__ *getattr (__object__*);
+	void print ();
+};
+
+static TypeObj frameTypeObj ctor (frameObj._v_p_t_r_);
+
+frameObj.frameObj (int i)
+{
+	__destructible__.ctor ();
+	n = i;
+	sig = current_frame_sig ();
+}
+
+__object__ *frameObj.getattr (__object__ *o)
+{
+	if (current_frame_sig () != sig)
+		RaiseNotImplemented ("sys._getframe() must be used in the function");
+
+	if (o == Interns.f_locals)
+		return f_locals (n);
+	if (o == Interns.f_globals)
+		return f_globals (n);
+
+	RaiseNoAttribute (o);
+}
+
+void frameObj.print ()
+{
+	print_out ("<pseudo-frame object>");
+}
+
+_module __object__ *_getframe (REFPTR argv[], int argc)
+{
+	int n = argc ? argv [0].check_int ()->i : 0;
+	return new frameObj (n);
+}
+
+/*
+ * sys_stdout() hack
+ */
+
+static ModuleObj *sys;
+
+__object__ *sys_stdout ()
+{
+	if_unlikely (!sys)
+		return &None;
+	__object__ *o = sys->getattr (Interns._stdout); /* XXX: may raise. */
+	if_likely (!o || o == stdoutObj)
+		return &None;
+	try o = o->getattr (Interns.write);
+	else o = &None;
+	return o;
+}
+
+/* module */
+
+static const bltinfunc funcs [] = {
+	{ "exc_info",		0, exc_info, 0 },
+	{ "exit",		SETARGC (0, 1), exit_sys, 0 },
+	{ "getrefcount",	SETARGC (1, 1), getrefcount, 0 },
+	{ "setrecursionlimit",	SETARGC (1, 1), donothing_f, 0 },
+	{ "_getframe",		SETARGC (0, 1), _getframe, 0 },
+	BSENTINEL
+};
+
+/* --------------------------------------------------- */
+
+extern REFPTR sys_modules;
+extern REFPTR modpath;
+extern char **Program_argv;
+extern int Program_argc;
+
+slowcold __object__ *import_sys ()
+{
+	ModuleObj *ss;
+	unsigned long number = 1;
+	sys = ss = new ModuleObj ictor (
+		('stdin', stdinObj),
+		('stderr', stderrObj),
+		('version', '2.4'),
+		('byteorder', ((char*)&number)[0] ? "little" : "big"),
+		('path', modpath.o),
+		('PYVM_HOME', PYVM_HOME),
+		('platform', 'linux2'),
+		('builtin_module_names', new ListObj (new StringObj ('posix'))),
+		('modules', sys_modules.o),
+		('maxint', $LONG_MAX),
+		('pyctmp', PYVM_HOME "tmp/pycdir"),
+		('version_info', new Tuplen (newIntObj (2), newIntObj (4), newIntObj (1),
+				new StringObj ('final'), newIntObj (0))),
+		('copyright', "pyvm 1.0 (strawman) -- ``there's something wrong with spacetime in pyvm''")
+	);
+	{
+		ListObj *LL = new ListObj;
+		for (int i = 0; i < Program_argc; i++)
+			LL->append (new StringObj (Program_argv [i]));
+		ss->setattr (INTERNED ("argv"), LL);
+	}
+	ss->setattr (Interns._stdout, stdoutObj);
+	ss->GC_ROOT ();
+	ss->AddFuncs (funcs);
+	return ss;
+}

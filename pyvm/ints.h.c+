@@ -1,0 +1,126 @@
+
+NEW_ALLOCATOR (IntObj)
+
+///////////////////////////////////////////////////
+
+#define MINNEG 127
+#define MAXPOS 256
+
+static class IntObj SmallInts [MINNEG + MAXPOS];
+
+IntObj *IntObj_0, *IntObj_1;
+
+static slowcold class InitNums : InitObj {
+	int priority = INIT_NUMBERS;
+	void todo ()
+	{
+		for (int i = 0; i < MAXPOS + MINNEG; i++) {
+			SmallInts [i].i = i - MINNEG;
+			SmallInts [i].inf ();
+		}
+		IntObj_0 = newIntObj (0);
+		IntObj_1 = newIntObj (1);
+	}
+};
+
+IntObj.IntObj (long x)
+{
+	i = x;
+	__object__.ctor ();
+}
+
+void IntObj.__release ()
+{
+	delete *this;
+}
+
+void IntObj.print ()
+{
+	print_out (i);
+}
+
+IntObj *newIntObj (int x)
+{
+	if (x > -MINNEG && x < MAXPOS)
+		return &SmallInts [x + MINNEG];
+
+	return new IntObj (x);
+}
+
+int IntObj.cmp_GEN (__object__ *o)
+{
+	if (o->vf_flags & VF_NUMERIC) {
+		if_unlikely (FloatObj.isinstance (o)) {
+			double ff = i - FloatObj.cast (o)->f;
+			return ff < 0 ? -1 : ff > 0 ? 1 : 0;
+		}
+		return i - IntObj.cast (o)->i;
+	}
+	return stype - o->stype;
+}
+
+__object__ *IntObj.binary_multiply (__object__ *o)
+{
+	if (TupleObj.typecheck (o)) {
+		int len = TupleObj.cast (o)->len, i = i, j;
+		TupleObj *L;
+		if (ListObj.isinstance (o)) 
+			L = new ListObj __sizector (len * i);
+		else {
+			if (!len || !i)
+				return NILTuple;
+			L = new Tuplen __sizector (len * i);
+		}
+		L->len = len * i;
+		REFPTR *xdata = TupleObj.cast (o)->data, *vdata = L->data;
+
+		if (len == 1) {
+			__object__ * const v = xdata [0].o;
+			for (j = 0; j < i; j++)
+				vdata [j].o = v;
+		} else {
+			int chs = len * sizeof (REFPTR);
+			for (j = 0; j < i; j++)
+				memcpy (vdata + j*len, xdata, chs);
+		}
+		for (j = 0; j < len; j++)
+			xdata [j].o->refcnt += i;
+		return L;
+	}
+	if (StringObj.isinstance (o))
+		return StringObj.cast (o)->binary_multiply (this);
+	return o->binary_multiply (this);
+//	RaiseNotImplemented ("binary_multiply number * this specific thing");
+}
+
+__object__ *TupleObj.binary_multiply (__object__ *o)
+{
+	return IntObj.fcheckedcast (o)->binary_multiply (this);
+}
+
+slow bool IntObj.permanent ()
+{
+	return i > -MINNEG && i < MAXPOS;
+}
+
+/****
+ **** pow(). Just use libm pow() on doubles and then see it the result has
+ **** no decimal digits and it fits inside a long.
+ **** XXX - does not always work
+ ****/
+
+extern double pow (double, double), fmod (double, double);
+
+__object__ *Num_Power (__object__ *base, __object__ *exponent)
+{
+	double rez = pow (base->todouble (), exponent->todouble ());
+	if (!FloatObj.isinstance (base) && fmod (rez, 1.0) == 0.0
+	 && rez <= (double) $LONG_MAX && rez >= (double) $LONG_MIN)
+			return newIntObj ((long) rez);
+	return new FloatObj (rez);
+}
+
+__object__ *ORD (unsigned char x)
+{
+	return &SmallInts [x + MINNEG];
+}

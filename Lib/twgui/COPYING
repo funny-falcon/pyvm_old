@@ -1,0 +1,32 @@
+
+Twilight GUI is freeware.
+
+Importing a wrapper on the other hand, means that the wrapped toolkit is
+also imported.  For that, you should see the license of each toolkit.
+For example, PyQT is a GPL'd library which means it can't be used by
+non-GPL code.  Therefore, if you wish to use Twilight GUI in software
+which is not compatible with the GNU GPL, you are not supposed to import
+'wrap_pyqt.py'.
+
+For the license of each toolkit, please see:
+
+- PyGTK
+  http://www.pygtk.org/
+  LGPL
+
+- PyQT
+  http://www.riverbankcomputing.co.uk/pyqt/
+  GPL
+
+- wxPython
+  http://www.wxpython.org/
+  GPL + blanket permission to link it in any kind of program
+
+- Tkinter
+  http://www.python.org
+  Python License
+
+If, a malicious user, renames 'wrap_pyqt.py' to 'wrap_tkinter.py'
+and renders the application with QT despite your intentions, you
+are, of course, not responsible.
+

@@ -1,0 +1,5 @@
+This provides an API compatible to the PyOpenGL API.
+
+It is not the pyopengl project found at http://pyopengl.sourceforge.net
+
+Just libglut wrapped with the DLL module (ctypes-like)

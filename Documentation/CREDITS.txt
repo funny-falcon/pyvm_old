@@ -1,0 +1,59 @@
+pyvm includes code from
+=======================
+
+Random number generator:
+   A C-program for MT19937.
+   Coded by Takuji Nishimura and Makoto Matsumoto.
+
+Memory allocator (good old malloc):
+   Doug Lea's malloc
+
+Regular Expressions - PCRE library (from exim):
+   Philip Hazel
+
+zlib:
+  Jean-loup Gailly and Mark Adler
+
+MD5:
+   RSA Data Security, Inc. MD5 Message-Digest Algorithm
+
+SHA:
+   NIST Secure Hash Algorithm
+   heavily modified by Uwe Hollerbach <uh@alumni.caltech edu>
+   from Peter C. Gutmann's implementation as found in
+   Applied Cryptography by Bruce Schneier
+
+OpenGL Demos, translated to python from Mesa-Demos which are:
+    Copyright (c) Mark J. Kilgard, 1994.
+    (c) Copyright 1993, Silicon Graphics, Inc.
+
+xmllib.py:
+   Sjoerd Mullender
+
+web.py - http://webpy.org
+   Aaron Swartz
+
+Python markdown - http://freewisdom.org/projects/python-markdown:
+   Yuri Takhteyev
+
+Python
+======
+
+the pyc compiler is derrived from python's 'compiler package'.
+Also some other modules are taken from python's 2.4 standard
+library, modified and included in pyvm's standard library.
+
+We don't know who wrote this code, so many thanks go to
+PSF and the people listed at Doc/ACKS in python.
+
+pyvm may be much faster than python but that doesn't mean
+python isn't good.  The CPython implementation is a great
+program with some very smart optimizations.
+pyvm uses all the wisdom of the CPython vm plus a couple
+of new ideas and that's why it's faster.
+If I had started from the scratch without looking at the
+sources of Python, pyvm wouldn't be even close :)
+
+pyvm is definitelly a "standing on the shoulders of giants"
+example.  Credits for the performance of pyvm should indirectly
+go to Tim Peters, Guido van Rossum, and the other python hackers.

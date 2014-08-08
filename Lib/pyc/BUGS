@@ -1,0 +1,17 @@
+
+Known Bugs
+
+
+- Unicode encoding.
+  If a comment like:
+	#! -*- coding: koi8-r -*-
+  is found at the beginning of a line, something happens and pycparser
+  does not encode unicode strings properly.
+
+  I know nothing about unicode, and I can't fix it.
+  see the file Lib/test/test_pep263.py
+
+- Only the DFA parser can do assignment-expressions.
+  Known bug of the DFA parser is that it can't do:
+
+	x[:,2]	# problem with the comma after the colon

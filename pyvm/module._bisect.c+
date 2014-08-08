@@ -1,0 +1,42 @@
+#include "dynlib.h"
+
+_module __object__ *bisect_right (REFPTR argv[], int argc)
+{
+	int lo, hi, mid;
+	TupleObj *T = TupleObj.checkedcast (argv [0].o);
+	REFPTR *data = T->data;
+	__object__ *x = argv [1].o;
+
+	hi = argc == 4 ? IntObj.fcheckedcast (argv [3].o)->i : T->len;
+	lo = argc >= 3 ? IntObj.fcheckedcast (argv [2].o)->i : 0;
+
+	/***** XXX: check the limits! if out of limits don't bisector! **/
+	while (lo < hi)
+		if (x->cmp_GEN (data [mid = (lo + hi) / 2].o) > 0)
+			lo = mid + 1;
+		else hi = mid;
+
+	return newIntObj (lo);
+}
+
+_module __object__ *NOTIMPL (REFPTR argv[], int argc)
+{
+	RaiseNotImplemented ("Not all of _bisect module is implemented");
+}
+
+/* module */
+
+static bltinfunc funcs [] = {
+	{ "bisect_right",	SETARGC (2, 4), bisect_right, 0 },
+	{ "bisect_left",	SETARGC (2, 4), NOTIMPL, 0 },
+	{ "insort_left",	SETARGC (2, 4), NOTIMPL, 0 },
+	{ "insort_right",	SETARGC (2, 4), NOTIMPL, 0 },
+	{ "bisect",		SETARGC (2, 4), NOTIMPL, 0 },
+	{ "insort",		SETARGC (2, 4), NOTIMPL, 0 },
+	BSENTINEL
+};
+
+slowcold __object__ *import__bisect ()
+{
+	return new ModuleObj BltinModule ("_bisect", funcs);
+}

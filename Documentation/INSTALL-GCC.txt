@@ -1,0 +1,33 @@
+For pyvm you'll need gcc 3.4, 4.0+ (3.3/3.2 may work but are untested).
+
+If you need to install it here is how.
+
+- Go to gcc.gnu.org, click 'releases' download gcc-core-4.0.2.tar.bz2
+
+- Unpack.
+
+- Make a new directory somewhere you have disk space, say, /xxx/objdir
+
+- cd to objdir and from inside objdir type:
+
+	<path-to-gcc-source>/configure --prefix=~/gcc4.0 --program-suffix=4.0 --with-cpu=k6
+
+  this is the way to make a private installation of gcc that will not conflict with your
+  distribution's gcc/g++/java/etc. "~/gcc-4.0" is "<your-home-dir>/gcc-4.0".
+  For cpu pick your favorite.
+
+- type
+
+	make bootstrap; make install
+
+  this takes about 20 minutes at 1.5GHz. For much older systems you can arrange
+  to go out and drink some beers.
+
+- go to your ~/bin/ and
+
+	ln -s ../gcc4.0/bin/gcc4.0 gcc4.0
+
+DONE!
+
+Now you should edit pyvm/Makefile and lwc/Makefile and change gcc to gcc4.0
+Note that lwc must be compiled with the same compiler that will compile pyvm!

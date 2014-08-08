@@ -1,0 +1,22 @@
+#include "dynlib.h"
+
+extern REFPTR _GC_LIST;
+
+static __object__ *gc_traverse (REFPTR [])
+{
+	weakref_collect ();
+	GC_collect (_GC_LIST);
+	return &None;
+}
+
+/* module */
+
+static bltinfunc funcs [] = {
+	{ "collect",	0, gc_traverse, 0 },
+	BSENTINEL
+};
+
+slowcold __object__ *import_gc ()
+{
+	return new ModuleObj BltinModule ("gc", funcs);
+}

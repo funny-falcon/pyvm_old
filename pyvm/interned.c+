@@ -1,0 +1,90 @@
+/***************************************************************************
+	Interned strings.
+****************************************************************************/
+
+#include "dynlib.h"
+
+_Interns Interns;
+
+static DictObj interns_dict __noinit ();
+
+/* interned strings created from char* are immortal */
+
+slow StringObj *new_interned (const char *s)
+{
+	return new_interned (s, strlen (s));
+}
+
+slow StringObj *new_interned (const char *s, int l)
+{
+	if (l == 1)
+		return (StringObj*) char_string ((unsigned char) *s);
+	StringObj *S = new StringObj intern (s, l);
+	REFPTR xx = S;
+	if (interns_dict.contains (S))
+		return (StringObj*) interns_dict.xgetitem_str (S);
+	interns_dict.xsetitem_str (S, S);
+	S->inf ();
+	return S;
+}
+
+/* while ones created at runtime, are weakreferences */
+
+__object__ *intern_string (StringObj *S)
+{
+	__object__ *o;
+
+	if (S->len == 1)
+		return (StringObj*) char_string ((unsigned char) S->str [0]);
+	if ((o = interns_dict.xgetitem_str (S)))
+		return o;
+	interns_dict.xsetitem_str (S, S);
+	S->hash ();
+	return S;
+}
+
+static StringObj *intern_cache;
+
+__object__ *intern_string2 (const char *s, int l)
+{
+	if (l == 1)
+		return (StringObj*) char_string ((unsigned char) s [0]);
+
+	char tmp [l + 1];
+	StringObj *S;
+
+	memcpy (tmp, s, l);
+	tmp [l] = 0;
+	intern_cache->str = tmp;
+	intern_cache->len = l;
+	intern_cache->mkhash ();
+
+	if (interns_dict.contains (intern_cache))
+		return interns_dict.xgetitem_str (intern_cache);
+	S = new StringObj intern (tmp, l, intern_cache->phash);
+	interns_dict.xsetitem_str (S, S);
+	return S;
+}
+
+bool is_intern (StringObj *S)
+{
+	return S->len == 1 || interns_dict.contains ((__object__*) S);
+}
+
+
+static	slowcold class InitInternDict : InitObj {
+	int priority = INIT_INTERNS0;
+	void todo ()
+	{
+		interns_dict.ctor ();
+		interns_dict.GC_ROOT ();
+		interns_dict.inf ();
+		intern_cache = new StringObj ("");
+	}
+};
+
+
+void gc_interns ()
+{
+	interns_dict.D.clean_weak_vals (2);
+}

@@ -1,0 +1,238 @@
+/******************************************************************************
+
+	Dictionary optimization.
+
+ 	We can optimize some dictionaries when we find the opportunity.
+	Right now this happens at BUILD_CLASS and RETURN_MODULE because
+	theoretically the class/module __dict__s will have lots of hits
+	so some work is worth it.
+
+	The results from optimization are not great or anything.
+	Actually the effect of the optimization may make our program
+	slower (one never knows. we may move the most important element
+	to a bad position). But the odds are on our side by a very
+	small %
+
+******************************************************************************/
+
+#include "dynlib.h"
+
+//#define BRENTON_STATS
+
+#define PERTURB_SHIFT 5
+void dictionary.resize ();
+
+static int dictionary.lkcost (__object__ *k, unsigned long h)
+{
+	register unsigned long mask = mask, i = h & mask, p;
+	dictEntry *tbl = tbl, *ep = &tbl [i];
+
+	if (ep->key.o == k) return 1;
+
+	int c = 2;
+	for (p = h; ; p >>= PERTURB_SHIFT, c++) {
+		i = 5 * i + p + 1;
+		ep = &tbl [i & mask];
+		if (ep->key.o == k) return c;
+	}
+}
+
+static int dictionary.costing ()
+{
+	dictEntry *E = 0;
+	int cc = 0;
+
+	while ((E = __iterfast (E)))
+		cc += lkcost (E->key.o, E->hash);
+
+	return cc;
+}
+
+static int shift1 (unsigned long h, unsigned long mask)
+{
+	unsigned long i = h & mask;
+	return (i * 5 + h + 1) & mask;
+}
+
+#ifdef BRENTON_STATS
+static void dictionary.przoo ()
+{
+	int cc, ace=0;
+	for (int i = 0; i < mask+1; i++)
+		if (tbl [i].val.o) {
+			cc = lkcost (tbl [i].key.o, tbl [i].hash);
+			if (cc == 1)
+				++ace;
+//				pprint ("[", i, "]:", tbl [i].hash & mask, tbl [i].key.o, cc);
+			else
+;
+//				pprint ("[", i, "]:", tbl [i].hash & mask, tbl [i].key.o, COLB, cc, COLE);
+		}
+	pprint (ace, "aces");
+}
+#endif
+
+static dictEntry *dictionary.findEntry (unsigned long h, __object__ *k)
+{
+	register unsigned long mask = mask, i = h & mask, p;
+	register dictEntry *tbl = tbl, *ep;
+
+	ep = &tbl [i];
+	if (!ep->key.o)
+		return ep;
+
+	for (p = h; ; p >>= PERTURB_SHIFT) {
+		i = 5 * i + p + 1;
+		ep = &tbl [i & mask];
+		if (!ep->key.o)
+			return ep;
+	}
+}
+
+/* Dictionary optimization.
+   First we see if the dictionary is PERFECT (all elements at first-hit, 70%) and then
+   if it's OPTIMAL (total hit cost cannot be improved, 20%).
+   If it isn't, the current optimization method is a brent-like ordering: we try
+   to maximize the number of first-hit elements.  That may hurt the total hit cost.
+
+   The other thing done here is that if the dict contains '__module__' or '__doc__'
+   these keys are penaltized and other keys get to better first-hit positions.
+
+   A property of python's hash table: If two keys K1 and K2 have the same first-hit
+   position P1, then they also have the same second-hit position P2. That's used in
+   the algorithm and therefore it's not suitable for any hash table.
+*/
+void dictionary.brenton (__object__ *name)
+{
+	if (this->used != this->fill)
+		resize ();
+
+#ifdef	BRENTON_STATS
+//pprint ("DODODOD:("COLX, mask, COLE, used, ")", name, "");
+#endif
+	int mask = mask, used = used, i, j;
+	dictEntry *E = 0, Z [1];
+	long h;
+	int XX [mask + 1];
+
+	memset (XX, 0, (mask+1) * sizeof *XX);
+
+	while ((E = __iterfast (E)))
+		++XX [E->hash & mask];
+
+	/* has collisions? */
+	for (i = 0; i <= mask; i++)
+		if_unlikely (XX [i] > 1)
+			goto have_collisions;
+
+#ifdef	BRENTON_STATS
+//pprint (COLX"	PERFECT!!"COLE);
+#endif
+	return; /* PERFECT */
+
+have_collisions:;
+
+	/* See if OPTIMAL */
+
+	int oc = used, cc = costing ();
+
+	for (i = 0; i <= mask; i++)
+		if (XX [i] > 1)
+			oc += 2*XX [i] - 3;
+
+#ifdef	BRENTON_STATS
+//if (oc==cc) pprint (COLS"	OPTIMAL!!"COLE);
+#endif
+	if (oc == cc)
+		goto finish;
+
+	/* the C table is used both by 'optimal cost refinement' and the brenton algorithm */
+	dictEntry C [used];
+
+	for (i = 0, j = 0; i <= mask; i++)
+		if (tbl [i].val.o)
+			C [j++] = tbl [i];
+
+	/* refine optimal cost */
+	for (i = 0; i <= mask; i++)
+		if (XX [i] > 1) {
+			/* If second hit position occupied, increase optimal */
+			for (j = 0; (C [j].hash & mask) != i; j++)
+				;;
+			if (XX [shift1 (C [j].hash, mask)])
+				++oc;
+		}
+
+#ifdef	BRENTON_STATS
+//if (oc==cc) pprint (" re"COLS"	OPTIMAL!!"COLE);
+#endif
+	/* is optimal? */
+	if (oc == cc)
+		goto finish;
+
+#ifdef	BRENTON_STATS
+//pprint ("=============================================");
+//pprint (name, COLB"* * "COLE"Actual cost:", cc, "optimal cost:", oc);
+//przoo ();
+#endif
+
+	/* Do Brenton! */
+	memset (tbl, 0, (mask+1) * sizeof *C);
+
+	/* insert non-colliding keys */
+	for (i = 0; i < used; i++)
+		if (XX [h = C [i].hash & mask] == 1) {
+			XX [h] = 0;
+			tbl [h] = C [i];
+		}
+
+#ifdef	BRENTON_STATS
+//pprint ("  ..moddile brenton actual cost=", costing ());
+#endif
+
+	/* Insert but maximize first hits */
+	for (i = 0; i < used; i++)
+		if (XX [h = C [i].hash & mask])
+			if (!tbl [h].val.o)
+				tbl [h] = C [i];
+			else if ((tbl [h].hash & mask) != h) {
+				Z [0] = tbl [h];
+				tbl [h] = C [i];
+				E = findEntry (Z [0].hash, Z [0].key.o);
+				*E = Z [0];
+			} else {
+				E = findEntry (C [i].hash, C [i].key.o);
+				*E = C [i];
+			}
+		else /* silly warnings */;
+
+
+#ifdef	BRENTON_STATS
+pprint ("DODODOD:("COLX, mask, COLE, used, ")", name, "");
+	pprint ("....After brenton actual cost=", costing ());
+int dc = costing ();
+	if (dc > cc)
+		pprint (COLS"* * * BADBADBAD * * * "COLE);
+	else if (dc < cc)
+		pprint (COLS"* * * GOOD!!!!!!!!!!! "COLE);
+	else
+		pprint ("- - Unaffected - -");
+
+//przoo ();
+#endif
+
+ finish:;
+
+	/* 'rare' entries at first-hit position are penaltized */
+	StringObj *rare [] = { Interns.__module__, Interns.__doc__, Interns.__repr__ };
+
+	for (i = 0; i < sizeof rare / sizeof rare [0]; i++)
+		if ((E = findEntry (rare [i]->phash, OCC rare [i]))
+		&& &tbl [h = E->hash & mask] == E && XX [h] > 1)
+			if ((tbl [shift1 (E->hash, mask)].hash & mask) == h) {
+				dictEntry *E2 = &tbl [shift1 (E->hash, mask)];
+				Z [0] = *E;
+				*E = *E2;
+				*E2 = Z [0];
+			}
+}
